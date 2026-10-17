@@ -22,7 +22,7 @@ G-001 시험 골
 ## 사용자 가치
 영업팀이 검색한다
 ## 완료 조건
-- [ ] 부분 일치 검색
+- [x] 부분 일치 검색
 ## 제외 범위
 - 엑셀
 ## 영향·위험
@@ -299,7 +299,8 @@ class ReviewGateTest(Repo):
         self.write("b.py", "b = 1\n")
         os.makedirs(".vibe/review", exist_ok=True)
         self.write(".gitignore", ".vibe/\nmr.md\n")
-        self.write(".vibe/review/r2.tree", vf_git.snapshot())   # 라운드 2 시점
+        self.write(".vibe/review/r2.tree", vf_git.snapshot() + "\ngoal: G-001\n")   # 라운드 2 시점 + 골
+        self.write(".vibe/review/r2.txt", "VERDICT: CHANGES\n")  # 끝난 라운드 = 판정 출력 + 스냅샷
         self.write("a.py", "a = 2  # 열린 지적 수정\n")
         self.write("b.py", "b = 2  # 다른 변경\n")
         r = self.review("--round", "3", "--files", "a.py", "--dry")
@@ -315,7 +316,7 @@ class ReviewGateTest(Repo):
         self.write(".gitignore", ".vibe/\nmr.md\n")
         self.write("a.py", "a = 1  # 라운드 1 이전\n")
         os.makedirs(".vibe/review", exist_ok=True)
-        self.write(".vibe/review/r1.tree", vf_git.snapshot())
+        self.write(".vibe/review/r1.tree", vf_git.snapshot() + "\ngoal: G-001\n")
         self.write(".vibe/review/r1.txt", "FINDING: R1 | blocker | a.py:1 | x | y\nVERDICT: CHANGES\n")
         self.write("c.py", "c = 1  # 라운드 1 이후\n")
         r = self.review("--round", "2", "--dry")
@@ -473,7 +474,7 @@ class DesignGateTest(Repo):
         self.assertIn("2회를 넘음", self.check(self.body(confirm=conf), "build").stdout)
 
     def test_skip_allowed_for_small_change_only(self):
-        skip = "- 생략: 작은 변경"
+        skip = "- 생략: 작은 변경 (예상 5줄·1파일)"
         self.assertEqual(self.check(self.body(confirm=skip), "build").returncode, 0)
         self.write("app.py", "x = 1\n")
         self.assertEqual(self.check(self.body(confirm=skip, plan="같음"), "review").returncode, 0)
@@ -485,6 +486,8 @@ class DesignGateTest(Repo):
 
     def test_design_review_dry_payload_and_limit(self):
         self.write("app.py", "def search(q):\n    return []\n")
+        import vf_git
+        self.write(".vibe-flow.json", '{"base": "%s"}' % vf_git.snapshot())  # 설계 확인은 기준 커밋 내용을 본다
         self.write("mr.md", self.body(confirm="(진행 전)"))
         r = self.run_script("review.py", "--design", "1", "--mr", "mr.md", "--dry")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -621,6 +624,8 @@ class TeamHandoffTest(unittest.TestCase):
             t = open(p, encoding="utf-8").read()
             t = re.sub(r"- \[~\] (G-001 [^(]*)\(착수 @\S+ [\d-]+\)[^\n]*", rf"- [x] \1(@{user} 2026-10-17)", t)
             open(p, "w", encoding="utf-8", newline="\n").write(t)
+            os.makedirs(os.path.join(cwd, "docs/handoff/mr"), exist_ok=True)
+            w("docs/handoff/mr/G-001.md", MR_OK, "w")   # 기록 커밋에 MR 본문(검증 증거)
         sh("git", "add", "-A", cwd=cwd)
         sh("git", "commit", "-qm", "G-001 거래처 검색", cwd=cwd)
 

@@ -16,11 +16,11 @@ description: Use when a goal MR/PR needs code review, when the user says "리뷰
 ## 순서
 
 1. 테스트를 돌려 `.vibe/test-summary.txt`.
-2. `python $S/review.py --round 1 --mr <mr> --tests .vibe/test-summary.txt` (전체).
-3. blocker·major를 고치고 `--round 2`(지난 라운드 이후 diff), 그래도 열린 지적이 있으면 `--round 3 --files <고친 파일>`.
-4. 라운드마다 「리뷰 기록」에 한 줄, 끝에 `- 판정: 확정`. 3라운드 뒤 blocker가 남으면 `판정: 보류`, 사용자에게.
+2. `python $S/review.py --round 1 --mr <mr> --tests .vibe/test-summary.txt` (전체). review.py도 단계 검사를 돌려 막히면 Codex를 부르지 않는다. 라운드 1 응답은 완료 조건 번호(1..N)마다 정확히 한 줄 `CHECKED: <번호> — <근거>`가 있어야 유효(누락·중복이면 `.failed`, 다시 돌린다). 다른 골의 `.vibe/review` 기록은 쓰이지 않는다.
+3. blocker·major를 고치고 `--round 2`(지난 라운드 이후 diff), 그래도 열린 지적이 있으면 `--round 3 --files <고친 파일>`. 실패한 라운드는 끝난 것이 아니다.
+4. 라운드마다 「리뷰 기록」에 한 줄(라운드 1은 `검토 근거 N/N`), 끝에 `- 판정: 확정`. 3라운드 뒤 blocker가 남으면 `판정: 보류`, 사용자에게.
 5. 근거(파일:줄 + 재현 경로 또는 위반한 완료 조건) 없는 blocker는 확인 요청으로 강등하고, 확인한 내용을 다음 라운드에 넣는다.
-6. `python $S/mr_check.py <mr> --stage qa` 통과 → 다음은 **vibe-qa**. 리뷰 확정은 QA가 아니다.
+6. `python $S/mr_check.py <mr> --stage qa` 통과 → 다음은 **vibe-qa**. 리뷰 확정은 QA가 아니다. 완료 조건은 QA가 확인하고 `[x]`로 바꾼다 — `[x]` 아닌 항목이 남으면 merge가 막힌다.
 
 ## Red Flags
 

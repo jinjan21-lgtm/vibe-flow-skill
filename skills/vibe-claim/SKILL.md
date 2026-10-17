@@ -7,7 +7,7 @@ description: Use when starting a session or picking up work in a repo with docs/
 
 vibe-flow의 첫 단계. 규칙 원본은 vibe-flow 폴더(팀 `.claude/skills/vibe-flow/`, 개인 `~/.claude/skills/vibe-flow/`)의 `docs/structure.md`. 스크립트 `S=<그 폴더>/scripts`.
 
-**선점 push가 확인되기 전에는 코드를 읽지 않는다.** 탐색은 다른 세션에 보이지 않는다 — 같은 일을 둘이 탐색하는 것을 막는 유일한 지점이다.
+**선점이 확인되기 전에는 코드를 읽지 않는다**(원격 모드는 push 확인). 탐색은 다른 세션에 보이지 않는다 — 같은 일을 둘이 탐색하는 것을 막는 유일한 지점이다.
 
 ## 순서
 
@@ -15,7 +15,9 @@ vibe-flow의 첫 단계. 규칙 원본은 vibe-flow 폴더(팀 `.claude/skills/v
 2. 이어 갈 착수·보류·결정 대기·후보가 있으면 그것을 사용자에게 먼저 보인다.
 3. 골: `python $S/goal_gate.py list`. 맞는 활성 골이 없으면 `candidate "<제목>"` → 네 칸 채우기 → `judge <후보> --apply`. 판정(CREATE/REJECT/MERGE)을 그대로 따른다. 노스스타가 draft면 판정이 거부된다 — 사용자 확정을 요청하고 멈춘다.
 4. 선점: `python $S/handoff.py claim G-### "<할 일>" <접두사>/G-###-<주제>`. 중복이면 여기서 멈추고 합류·골 나누기를 사용자에게 묻는다.
-5. push 확인 메시지를 본 뒤 MR 본문(`templates/mr-body.md`)의 「골」만 채우고 `python $S/mr_check.py <mr> --stage claim`.
+   - 원격 모드(origin 있음): push 확인 메시지가 나와야 선점이다. push 실패를 로컬 커밋으로 대신하지 않는다 — `--no-push`는 사용자 지시일 때만.
+   - 로컬 모드(origin 없음 또는 `.vibe-flow.json` `"remote": false`): 스크립트가 로컬 커밋만 하고 `선점(로컬 모드 — 원격 없음): <브랜치>@<sha>`를 출력한다. 모드는 스크립트가 정한다.
+5. 선점 메시지를 본 뒤 MR 본문 `.vibe/mr-G-###.md`(`templates/mr-body.md`)의 「골」만 채우고 `python $S/mr_check.py <mr> --stage claim`.
 
 통과하면 다음은 **vibe-design**(탐색·설계). 단독으로 불렸으면 여기서 끝내고 다음 단계를 한 줄로 알린다.
 
@@ -30,6 +32,7 @@ vibe-flow의 첫 단계. 규칙 원본은 vibe-flow 폴더(팀 `.claude/skills/v
 | 생각 | 실제 |
 |---|---|
 | "먼저 코드 좀 보고 선점하자" | 선점 push가 먼저다 |
+| "push가 안 되니 로컬 커밋으로 선점" | 원격이 있으면 실패를 보고한다. 로컬 모드는 스크립트 판정뿐 |
 | "DECISIONS 전체를 한 번 읽어 두면 편하다" | 시작은 INDEX만. 결정은 vibe-design에서 태그로 |
 | "작은 일이라 골 없이" | 동작이 안 바뀌면 G-000, 아니면 후보 → judge |
 | "같은 골을 다른 사람이 잡았지만 내 쪽이 다르다" | 합류·나누기는 사용자가 정한다 |

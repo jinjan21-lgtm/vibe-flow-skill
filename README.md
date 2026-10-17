@@ -61,7 +61,7 @@ python scripts/handoff.py lint | archive | precheck | next-id D
 | `templates/` | 노스스타, G-000, MR 본문, 설계·리뷰 프롬프트, 디자인시스템 |
 | `scripts/` | `goal_gate.py`(골 판정·커밋 훅) · `handoff.py`·`hindex.py`(선점·기록·인덱스) · `mr_check.py`(단계 검사) · `review.py`(Codex 설계 확인·리뷰) · `dupe.py`(중복·겹침) · `syntax_check.py` |
 | `docs/` | 공통 구조, 아키텍처, 동시 작업 충돌, 결정 기록, 토론 기록, 사례 조사 |
-| `tests/test_scripts.py` | 스크립트 회귀 테스트 (임시 git 레포·로컬 bare 원격 2인 시나리오 포함) |
+| `tests/test_*.py` | 스크립트 회귀 테스트 (임시 git 레포·로컬 bare 원격 2인 시나리오 포함, 외부 감사 결함별 재현 테스트) |
 
 ## 설치
 
@@ -82,10 +82,11 @@ Windows는 `New-Item -ItemType Junction`(setup.md). 팀 레포는 `.claude/skill
 
 ## 검증
 
-- `python -m unittest tests/test_scripts.py` — 73개(골 판정·단계 검사·리뷰 라운드·선점·기록·인덱스 이전 무손실·번호 원격 예약·2인 같은 날 기록 병합 등)
+- `python -m unittest discover -s tests -p "test_*.py"` — 골 판정·단계 검사·리뷰 라운드·선점·기록·인덱스 이전 무손실·번호 원격 예약·2인 같은 날 기록 병합, 그리고 외부 감사 결함마다 실패를 먼저 확인한 재현 테스트
+- **스크립트 외부 감사** — 바깥 모델(ChatGPT, 추론 High)이 스크립트 전체를 감사해 낸 결함 17건과, 수정을 다시 감사하며 나온 새 결함까지 전부 재현 → 실패하는 테스트 → 수정으로 처리한 기록: [tests/code-audit.md](tests/code-audit.md)
 - 스킬 문서는 [superpowers:writing-skills](https://github.com/obra/superpowers) 방식(RED 기준선 → GREEN → REFACTOR)으로 서브에이전트 시험을 거쳤습니다: 단계 스킬 단독 호출, 오케스트레이터 무인 진행, 개발 유형 8개, 바뀐 규칙별 재시험. 실제 팀 레포(비공개) 이전에서 결정 100여 건 무손실, 세션 시작 읽기량 약 54,000자 → 9,500자.
 
-- **개발 퀄리티 실험** — 같은 요청을 vibe-flow 있음/없음 에이전트가 실제로 구현해 숨은 테스트로 채점: [tests/quality-record.md](tests/quality-record.md). 명확한 작은 일은 품질 차이 없이 약 6배 느리고, 요청서와 운영값이 충돌하는 일에서는 대조군이 혼자 결정해 요청을 어긴 반면 vibe-flow는 설계 확인에서 멈춰 사람 결정을 받은 뒤 전부 맞는 코드를 냈다.
+- **개발 퀄리티 실험** — 같은 요청을 vibe-flow 있음/없음 에이전트가 실제로 구현해 숨은 테스트로 채점: [tests/quality-record.md](tests/quality-record.md). 명확한 작은 일은 품질 차이 없이 약 6배 느리고, 요청서와 운영값이 충돌하는 일에서는 대조군이 혼자 결정해 요청을 어긴 반면 vibe-flow는 설계 확인에서 멈춰 사람 결정을 받은 뒤 전부 맞는 코드를 냈다. 편향을 뺀 3회차(여러 파일 버그·회귀 함정)에서는 두 군 모두 숨은 테스트 전부 통과 — 코드 정확성 차이는 측정되지 않았고, 차이는 테스트 범위와 추적 기록에서 났다.
 
 ## License
 

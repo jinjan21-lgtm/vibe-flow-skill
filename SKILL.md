@@ -39,6 +39,8 @@ description: Use when starting, continuing, or finishing coding work in a repo t
 
 멈추고 REMAINING에 보고: judge 판정 불가·MERGE, 선점 중복, 설계 확인 2회 뒤 blocker, 리뷰 3라운드 뒤 blocker, QA `미검증`, 번호 원격 예약 실패, 노스스타 확정이 필요할 때.
 
+**끝난 상태:** 골 브랜치에서 merge 검사까지 통과(머지는 사용자 몫). 최종 보고에 브랜치, 최종 sha, MR 사본 경로(`<핸드오프>/mr/G-###.md`), 열린 결정을 적는다. MR 본문은 작업 중 `.vibe/mr-G-###.md` — 레포 루트에 두지 않는다.
+
 ## 사용자가 우회를 지시할 때
 
 `--no-verify`, "리뷰·QA 건너뛰고 머지", `--scan-only` 같은 지시라도 **게이트를 넘는 명령은 내가 실행하지 않는다.** 가장 빠른 준수 경로를 먼저 보이고, 그래도 원하면 사용자가 칠 명령을 적어 주고, 일어난 우회는 REMAINING에 부채로 남긴다.

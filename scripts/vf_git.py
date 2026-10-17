@@ -28,6 +28,13 @@ def git_input(args, stdin):
     return r.stdout.strip()
 
 
+def codex_cmd(out, cfg=None):
+    """codex exec 명령. 추론 강도는 이 호출에만 지정한다(사용자 ~/.codex 설정은 건드리지 않음) — 기본 high, 설정 키 codex_effort."""
+    eff = (cfg or config()).get("codex_effort", "high")
+    cmd = ["codex", "exec", "--skip-git-repo-check", "-o", out]
+    return cmd + (["-c", f"model_reasoning_effort={eff}"] if eff else [])
+
+
 def config():
     cfg = dict(DEFAULT_CFG)
     if os.path.exists(".vibe-flow.json"):
@@ -37,17 +44,25 @@ def config():
 
 
 def snapshot():
-    """지금 작업 트리(미커밋·미추적 포함, .gitignore 제외)의 tree sha. 실제 인덱스는 건드리지 않는다."""
+    """지금 작업 트리(미커밋·미추적 포함, 추적 안 된 .gitignore 대상 제외)의 tree sha. 실제 인덱스는 건드리지 않는다."""
     fd, idx = tempfile.mkstemp(prefix="vf-index-")
     os.close(fd)
     os.remove(idx)  # git이 새 인덱스로 만들게 한다
     try:
         env = {"GIT_INDEX_FILE": idx}
+        if git("rev-parse", "--verify", "-q", "HEAD"):
+            git("read-tree", "HEAD", env=env, check=True)  # 추적 중인 무시 대상 파일도 남긴다
         git("add", "-A", env=env, check=True)
         return git("write-tree", env=env, check=True)
     finally:
         if os.path.exists(idx):
             os.remove(idx)
+
+
+def glob_match(f, globs):
+    """fnmatch에 '**/'가 0개 디렉터리도 뜻하게 한다(루트의 App.tsx도 '**/*.tsx'에 걸림)."""
+    import fnmatch
+    return any(fnmatch.fnmatch(f, g) or (g.startswith("**/") and fnmatch.fnmatch(f, g[3:])) for g in globs)
 
 
 def obj_type(ref):

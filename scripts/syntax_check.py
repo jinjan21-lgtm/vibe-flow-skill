@@ -3,7 +3,7 @@
 
   python syntax_check.py <폴더 또는 파일> [...]
 
-결과를 "통과/전체"로 출력하고, 하나라도 실패하면 exit 1. node가 없으면 exit 2(미검증).
+결과를 "통과/전체"로 출력하고, 하나라도 실패하면 exit 1. node가 없거나 검사할 파일이 0개면 exit 2(미검증).
 """
 import os
 import shutil
@@ -22,6 +22,9 @@ def main(targets):
             files.append(t)
         for root, _, names in os.walk(t):
             files += [os.path.join(root, n) for n in sorted(names) if n.endswith((".js", ".mjs"))]
+    if not files:
+        print(f"[syntax] 검사할 .js/.mjs 파일 없음 — 미검증 (대상: {' '.join(targets)})")
+        sys.exit(2)
     bad = []
     for f in files:
         r = subprocess.run([node, "--check", f], capture_output=True, text=True, encoding="utf-8")

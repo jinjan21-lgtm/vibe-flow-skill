@@ -30,22 +30,31 @@ def similarity(a, b):
 
 def remote_mrs():
     """열린 원격 MR/PR 목록: [{"id", "title", "branch", "body"}]. 조회할 수 없으면 빈 목록."""
-    if not vf_git.git("remote"):
+    remotes = vf_git.git("remote").split()
+    if not remotes:
         return []
-    try:
-        if shutil.which("gh"):
-            out = subprocess.run(["gh", "pr", "list", "--state", "open", "--limit", "100",
-                                  "--json", "number,title,headRefName,body"],
-                                 capture_output=True, text=True, encoding="utf-8", timeout=60).stdout
-            return [{"id": f"#{x['number']}", "title": x["title"], "branch": x["headRefName"],
-                     "body": x.get("body") or ""} for x in json.loads(out or "[]")]
-        if shutil.which("glab"):
-            out = subprocess.run(["glab", "mr", "list", "--output", "json"],
-                                 capture_output=True, text=True, encoding="utf-8", timeout=60).stdout
-            return [{"id": f"!{x['iid']}", "title": x["title"], "branch": x["source_branch"],
-                     "body": x.get("description") or ""} for x in json.loads(out or "[]")]
-    except (subprocess.SubprocessError, ValueError, KeyError):
-        pass
+    # 원격 주소로 공급자를 고르고(gitlab이면 glab 먼저), 앞의 도구가 실패하면 다음 도구로 넘어간다
+    url = vf_git.git("remote", "get-url", "origin" if "origin" in remotes else remotes[0]).lower()
+    order = ["glab", "gh"] if "gitlab" in url else ["gh", "glab"]
+    for tool in order:
+        if not shutil.which(tool):
+            continue
+        try:
+            if tool == "gh":
+                r = subprocess.run(["gh", "pr", "list", "--state", "open", "--limit", "100",
+                                    "--json", "number,title,headRefName,body"],
+                                   capture_output=True, text=True, encoding="utf-8", timeout=60)
+                if r.returncode == 0:
+                    return [{"id": f"#{x['number']}", "title": x["title"], "branch": x["headRefName"],
+                             "body": x.get("body") or ""} for x in json.loads(r.stdout or "[]")]
+            else:
+                r = subprocess.run(["glab", "mr", "list", "--output", "json"],
+                                   capture_output=True, text=True, encoding="utf-8", timeout=60)
+                if r.returncode == 0:
+                    return [{"id": f"!{x['iid']}", "title": x["title"], "branch": x["source_branch"],
+                             "body": x.get("description") or ""} for x in json.loads(r.stdout or "[]")]
+        except (subprocess.SubprocessError, OSError, ValueError, KeyError):
+            pass
     return []
 
 
@@ -80,7 +89,7 @@ def claims(cfg):
     out, seen = [], set()
     for src, t in texts:
         for m in CLAIM_RE.finditer(t):
-            key = (m.group(1).strip(), m.group(2), m.group(3))
+            key = (m.group(1).strip(), m.group(2), m.group(3), m.group(4))  # 브랜치가 다르면 다른 착수
             if key in seen:
                 continue
             seen.add(key)

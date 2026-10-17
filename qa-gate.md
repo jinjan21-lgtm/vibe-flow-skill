@@ -9,8 +9,8 @@
 
 ## 1단계 — 코드
 
-1. 기존 자동 테스트를 전부 돌린다(`.vibe-flow.json`의 `test_cmd`). 통과/전체 수와 소요 시간을 적는다. 자동 테스트가 없는 레포(빌드 없는 프로토타입 등)는 최소한 `python $S/syntax_check.py <폴더>`(node --check)를 `test_cmd`로 두고, 동작 검증은 브라우저 단계가 맡는다.
-2. 완료 조건마다 만든 테스트가 그 안에 있는지 확인한다. 없는 완료 조건이 있으면 테스트를 추가하고 다시 돌린다.
+1. 기존 자동 테스트를 전부 돌린다(`.vibe-flow.json`의 `test_cmd`). 통과/전체 수와 소요 시간을 적는다. 자동 테스트가 없는 레포(빌드 없는 프로토타입 등)는 최소한 `python $S/syntax_check.py <폴더>`(node --check, 검사할 파일이 0개면 exit 2 미검증)를 `test_cmd`로 두고, 동작 검증은 브라우저 단계가 맡는다.
+2. 완료 조건마다 만든 테스트가 그 안에 있는지 확인한다. 없는 완료 조건이 있으면 테스트를 추가하고 다시 돌린다. 확인된 완료 조건은 MR 「완료 조건」에서 `[x]`로 바꾼다(미체크가 남으면 merge 검사가 막는다).
 3. 실패한 테스트는 같은 명령으로 2회까지 다시 돌린다. 그래도 실패하면 `코드: 실패`다. 불안정한 테스트라고 판단해도 통과로 적지 않는다.
 
 ## 2단계 — 브라우저 (UI 파일이 바뀌었으면 필수)
@@ -28,7 +28,7 @@ UI 파일 여부는 `mr_check.py`와 같은 기준(`ui_globs`)으로 정한다. 
 
 ## 결과 등록
 
-MR 본문의 「QA 결과」를 채우고, MR 댓글에도 같은 내용을 남긴다.
+MR 본문(작업 중 `.vibe/mr-G-###.md`)의 「QA 결과」를 채우고, MR 댓글에도 같은 내용을 남긴다. 기록 커밋에서 이 본문을 `<핸드오프>/mr/G-###.md`로 복사한다(vibe-record) — 원격 MR이 없는 레포에서도 커밋만으로 검증을 볼 수 있다. 증거 캡처가 `.vibe/`에 있으면 사본의 링크는 추적되지 않는 파일을 가리킨다는 것을 「미검증·생략 항목과 사유」 옆에 밝힌다.
 
 ```
 - 대상 commit: 3f91bc5
@@ -41,12 +41,13 @@ MR 본문의 「QA 결과」를 채우고, MR 댓글에도 같은 내용을 남�
 
 ```bash
 # GitLab
-glab mr update <번호> --description "$(cat mr-body.md)" && glab mr note <번호> -m "$(sed -n '/^## QA 결과/,$p' mr-body.md)"
+MR=.vibe/mr-G-###.md   # 레포 루트에 두지 않는다 — 추적 안 된 루트 파일은 QA 대상 비교에 코드 변경으로 잡힌다
+glab mr update <번호> --description "$(cat $MR)" && glab mr note <번호> -m "$(sed -n '/^## QA 결과/,$p' $MR)"
 # GitHub
-gh pr edit <번호> --body-file mr-body.md && gh pr comment <번호> --body "$(sed -n '/^## QA 결과/,$p' mr-body.md)"
+gh pr edit <번호> --body-file $MR && gh pr comment <번호> --body "$(sed -n '/^## QA 결과/,$p' $MR)"
 ```
 
-머지 직전에 `python ~/.claude/skills/vibe-flow/scripts/mr_check.py mr-body.md --stage merge`가 통과해야 한다.
+머지 직전에 `python ~/.claude/skills/vibe-flow/scripts/mr_check.py .vibe/mr-G-###.md --stage merge`가 통과해야 한다.
 
 ## 재시도와 보류
 

@@ -20,7 +20,7 @@ description: Use when a goal is claimed and the approach is not yet confirmed �
 2. 선점 브랜치에서 코드를 읽는다. 탐색 결과물(임시 코드)은 버린다.
 3. MR 본문 「설계」 다섯 칸: 접근 방식 · 바꿀 모듈·파일 · 데이터·API 변경 · 대안과 선택 이유 · 테스트 계획. 개발 유형과 영향 표식(UI·API·데이터·의존성)은 vibe-flow `docs/task-types.md`로 정한다. `--stage draft`.
 4. 설계 확인: `python $S/review.py --design 1 --mr <mr>` → 「설계 확인」에 `- 확인 1: …`, `- 판정: 확정`. blocker가 남으면 `--design 2`. 2회 뒤에도 blocker면 `판정: 보류`, 사용자에게(결정 대기는 REMAINING `- [ ] 결정: …`). 사용자가 결정하면 D-nnn으로 기록하고 `- 판정: 확정 (사람 판정 D-nnn)` — 3회차는 없고, 바뀐 설계는 「계획 vs 실제」로 리뷰에 넘긴다(`review-loop.md`).
-5. 작은 변경(기본 50줄·3파일 이하)은 `- 생략: 작은 변경`. 커지면 리뷰 단계에서 다시 막힌다.
+5. 작은 변경(기본 50줄·3파일, 기록 제외)은 **코딩 전에** `- 생략: 작은 변경 (예상 N줄·M파일)`(N·M이 기준 초과면 막힘). 생략 중엔 `--stage build`가 코드 크기도 본다 — 넘으면 멈추고 4번. 구현 뒤 확인이면 `- 순서: 구현 선행 (사유)`.
 6. `python $S/mr_check.py <mr> --stage build` 통과 → 다음은 **vibe-dev**.
 
 ## Red Flags
@@ -30,4 +30,5 @@ description: Use when a goal is claimed and the approach is not yet confirmed �
 | "설계는 구현하면서 정리하자" | `--stage build`를 넘지 못한다 |
 | "결정 본문을 다 읽어야 안전하다" | 태그로 고른 유효 결정만. 전체 로드는 맥락만 잡아먹는다 |
 | "설계 확인 한 번 더" | 2회가 끝이다. 그 뒤는 사람 |
-| "생략하고 나중에 커지면 그때" | diff가 기준을 넘으면 그때 막힌다 — 처음부터 받는 게 싸다 |
+| "생략하고 커지면 그때" | 커밋 전 build가 막는다 |
+| "다 짰으니 설계 확인은 형식만" | 기준 커밋으로 보고 기록에 남는다 |

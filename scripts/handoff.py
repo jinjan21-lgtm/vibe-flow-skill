@@ -5,8 +5,10 @@
   python handoff.py precheck                       세션 시작 사전체크 (읽을 순서, 다른 참여자 변경, 착수 표시, 결정 대기, 후보)
   python handoff.py claim G-### "<할 일>" <브랜치> [--no-push]
                                                    선점: fetch → 중복 검사 → 브랜치 → REMAINING 착수 줄 커밋 → push
-  python handoff.py check-record [--commit <sha>]  완료 기록 검사: 그 커밋(기본 HEAD)에 작업 + WORKLOG·INDEX·REMAINING이
-                                                   함께 있어야 한다. 골 작업은 QA 뒤 기록을 마지막 작업 커밋에 amend로 합친다
+  python handoff.py check-record [--commit <sha>]  완료 기록 검사: 그 커밋(기본 HEAD)에 작업 + WORKLOG·INDEX·REMAINING
+                                                   + MR 본문(<핸드오프>/mr/G-###.md)이 함께 있어야 한다. 골 작업은 QA 뒤
+                                                   기록을 마지막 작업 커밋에 amend로 합친다
+  원격이 없거나 .vibe-flow.json "remote": false면 로컬 모드 — claim은 로컬 커밋만 한다
 
 인덱스 구조(docs/structure.md 「인덱스 계층」 — 대형 프로젝트):
   python handoff.py migrate                        예전 구조 → 진입 INDEX + 문서별 INDEX + 본문(원본 스냅숏 .vibe/migrate/<시각>/)
@@ -21,6 +23,7 @@
 import datetime
 import os
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -48,7 +51,19 @@ def write(p, text):
         f.write(text)
 
 
-def has_remote():
+def has_id(gid, text):
+    """골 ID 경계 일치 (G-123이 G-1234·G-123abc에 걸리지 않게. proto/G-123-x는 일치)."""
+    return re.search(rf"\b{re.escape(gid)}(?![0-9A-Za-z])", text) is not None
+
+
+def goal_file_names(goals, gid):
+    return [fn for fn in os.listdir(goals) if re.match(rf"{re.escape(gid)}(?![0-9A-Za-z])", fn)]
+
+
+def has_remote(cfg=None):
+    """원격 모드인가: origin이 있고 .vibe-flow.json "remote"가 false가 아니다. 아니면 로컬 모드(push 안 함)."""
+    if (cfg or {}).get("remote", True) is False:
+        return False
     return "origin" in vf_git.git("remote").split()
 
 
@@ -74,7 +89,7 @@ def precheck(cfg):
     mode, hdir, order = detect(cfg)
     me = vf_git.me()
     print(f"[precheck] 모드: {mode} · 폴더: {hdir} · 나: @{me}")
-    if mode == "team" and has_remote():
+    if mode == "team" and has_remote(cfg):
         vf_git.git("fetch", "-q", "origin")
         behind = vf_git.git("rev-list", "--count", f"HEAD..origin/{cfg['base']}")
         if behind and behind != "0":
@@ -157,15 +172,20 @@ def claim(cfg, gid, task, branch, push=True):
     me = vf_git.me()
     if not ID_RE.fullmatch(gid):
         die(f"[claim] 골 ID 형식이 아님: {gid}")
-    if gid not in branch:
+    if not has_id(gid, branch):
         die(f"[claim] 브랜치 이름에 골 ID가 없음: {branch}")
     pre = cfg.get("branch_prefixes") or []
     if pre and branch.split("/")[0] not in pre:
         die(f"[claim] 브랜치 접두사 규칙 위반: {branch} (허용: {'|'.join(pre)})")
     goals = vf_git.paths(cfg)["goals"]
-    if not (os.path.isdir(goals) and any(fn.startswith(gid) for fn in os.listdir(goals))):
+    gfs = goal_file_names(goals, gid) if os.path.isdir(goals) else []
+    if not gfs:
         die(f"[claim] {gid} 골 파일이 {goals}에 없음 — candidate → judge 먼저")
-    remote = has_remote() and push
+    st = hindex.field(read(f"{goals}/{gfs[0]}"), "status")  # goal_gate.field()와 같은 규칙: 파일 어디든 첫 'status:' 줄
+    if st != "active":
+        die(f"[claim] {gid} 골 상태가 active가 아님 ({st or '?'})")
+    local = not has_remote(cfg)   # 로컬 모드: 원격이 없거나 "remote": false — push 대상이 없다
+    remote = not local and push   # 원격이 있으면 push 필수. 건너뛰는 것은 사용자가 준 --no-push뿐
     for attempt in range(2):
         if remote:
             vf_git.git("fetch", "-q", "origin")
@@ -185,14 +205,18 @@ def claim(cfg, gid, task, branch, push=True):
                     die(f"[claim] 브랜치를 만들지 못함: {branch} {r}")
             rem = f"{hdir}/REMAINING.md"
             add_claim(rem, gid, task, me, branch)
-            vf_git.git("add", rem)
             # judge가 방금 만든 골 파일(아직 커밋 안 됨)도 함께 올려야 다른 참여자가 이 골을 본다
-            for fn in os.listdir(goals):
-                if fn.startswith(gid):
-                    vf_git.git("add", f"{goals}/{fn}")
-            vf_git.git("commit", "-q", "-m", f"{gid} 착수: {task}")
+            own = [rem] + [f"{goals}/{fn}" for fn in goal_file_names(goals, gid)]
+            vf_git.git("add", "--", *own)
+            # 경로를 지정해 커밋: 미리 staged된 다른 변경은 섞지 않고 staged 그대로 둔다
+            c = subprocess.run(["git", "commit", "-q", "-m", f"{gid} 착수: {task}", "--", *own],
+                               capture_output=True, text=True, encoding="utf-8")
+            if c.returncode:
+                die(f"[claim] 선점 커밋 실패 (훅 거부 등) — push하지 않음:\n{(c.stdout + c.stderr).strip()}")
         if not remote:
-            print(f"[claim] 선점 커밋 완료 (원격 없음 또는 --no-push): {branch}")
+            at = f"{branch}@{vf_git.git('rev-parse', '--short', 'HEAD')}"
+            print(f"[claim] 선점(로컬 모드 — 원격 없음): {at}" if local
+                  else f"[claim] 선점 커밋 완료 (--no-push — 사용자 지시, push 안 함): {at}")
             return
         r = vf_git.git("push", "-q", "-u", "origin", branch)
         if vf_git.git("rev-parse", "--verify", "-q", f"origin/{branch}"):
@@ -206,22 +230,50 @@ def claim(cfg, gid, task, branch, push=True):
 
 
 # ---------- check-record ----------
-def check_record(cfg, commit="HEAD"):
+MR_SECTIONS = ("리뷰 기록", "QA 결과")
+
+
+def mr_file_missing(hdir, gids, files, hi):
+    """검증 증거: 기록 커밋에 <핸드오프>/mr/G-###.md(MR 본문)가 있어야 한다 — .vibe/는 추적 안 되어 제3자가 못 본다.
+    핸드오프 폴더 안이라 QA 대상 비교(mr_check)와 작업 파일 판정에서 기록으로 빠진다."""
+    miss = []
+    for g in gids:
+        if g == "G-000":  # 동작 불변 변경(오타·규칙 문서 한 줄)은 골 MR·리뷰·QA 기록이 없다
+            continue
+        p = f"{hdir}/mr/{g}.md"
+        if p not in files:
+            miss.append(f"MR 본문 {p}가 이 커밋에 없음 — .vibe/mr-{g}.md를 복사해 기록과 같은 커밋에 넣는다")
+            continue
+        t = vf_git.git("show", f"{hi}:{p}")
+        if not has_id(g, t):
+            miss.append(f"{p}에 골 ID {g} 없음")
+        for name in MR_SECTIONS:
+            m = re.search(rf"^##\s+{name}\s*$(.*?)(?=^##\s|\Z)", t, re.M | re.S)
+            body = re.sub(r"<!--.*?-->|\(진행 전\)|<[^>\n]+>", "", m.group(1), flags=re.S) if m else ""
+            if not re.search(r"\w", body):
+                miss.append(f"{p}의 「{name}」이 없거나 비어 있음")
+    return miss
+
+
+def check_record(cfg, commit=None):
     """기록 검사: 한 커밋(기본 HEAD)에 작업 변경과 핸드오프 기록이 함께 있어야 한다.
-    골 작업은 QA 결과를 보고 기록하므로, QA 뒤 기록을 마지막 작업 커밋에 합친다(git commit --amend)."""
+    골 작업은 QA 결과를 보고 기록하므로, QA 뒤 기록을 마지막 작업 커밋에 합친다(git commit --amend).
+    --commit <sha>면 골 ID는 그 커밋 메시지에서만 — 지금 브랜치 이름은 그 커밋과 무관할 수 있다."""
+    branch = "" if commit else vf_git.current_branch()
+    commit = commit or "HEAD"
     mode, hdir, _ = detect(cfg)
     me = vf_git.me()
     goals_dir = vf_git.paths(cfg)["goals"]
     lo, hi, label = f"{commit}^", commit, vf_git.git("rev-parse", "--short", commit)
     msg = vf_git.git("log", "-1", "--format=%s%n%b", commit)
     files = vf_git.git("diff", "--name-only", lo, hi).splitlines()
-    gids = sorted(set(ID_RE.findall(msg)) | set(ID_RE.findall(vf_git.current_branch())))
+    gids = sorted(set(ID_RE.findall(msg)) | set(ID_RE.findall(branch)))
     miss = []
     work = [f for f in files if not f.startswith(hdir + "/") and not f.startswith(goals_dir + "/")]
     if not work:
         miss.append(f"{label}에 작업 파일 변경이 없음 — 기록은 작업과 같은 커밋에 넣는다(골 작업은 QA 뒤 git commit --amend로 합친다)")
     if not gids:
-        miss.append("커밋 메시지·브랜치에 골 ID 없음")
+        miss.append("커밋 메시지·브랜치에 골 ID 없음" if branch else "커밋 메시지에 골 ID 없음")
 
     def added(path):
         diff = vf_git.git("diff", lo, hi, "--", path)
@@ -238,28 +290,29 @@ def check_record(cfg, commit="HEAD"):
                 miss.append(f"WORKLOG 항목 제목에 @{me} 없음")
             if not re.search(rf"\{{#[^}}]*-{re.escape(me)}\}}", h):
                 miss.append(f"WORKLOG anchor가 -{me}로 끝나지 않음")
-            if gids and not any(g in h for g in gids):
+            if gids and not any(has_id(g, h) for g in gids):
                 miss.append("WORKLOG 항목 제목에 골 ID 없음")
         idx = [l for l in added(f"{hdir}/WORKLOG/INDEX.md") if l.startswith("- ")]
         if not idx:
             miss.append("WORKLOG/INDEX.md에 한 줄 추가 없음")
-        elif not (f"@{me}" in idx[-1] and any(g in idx[-1] for g in gids)):
+        elif not (f"@{me}" in idx[-1] and any(has_id(g, idx[-1]) for g in gids)):
             miss.append(f"INDEX 줄에 @{me}와 골 ID가 함께 있어야 함")
     else:
         wl = [f for f in files if f.startswith(f"{hdir}/WORKLOG")]
         if not wl:
             miss.append(f"{hdir}/WORKLOG 기록 없음")
     rem_added = added(f"{hdir}/REMAINING.md")
-    done = [l for l in rem_added if re.match(r"^\s*-\s*\[x\]", l) and any(g in l for g in gids)]
+    done = [l for l in rem_added if re.match(r"^\s*-\s*\[x\]", l) and any(has_id(g, l) for g in gids)]
     if not done:
         miss.append("REMAINING에 이 골의 [x] 완료 줄 없음")
     elif mode == "team" and f"@{me}" not in done[-1]:
         miss.append(f"REMAINING 완료 줄에 (@{me} 날짜) 없음")
     rem_now = vf_git.git("show", f"{hi}:{hdir}/REMAINING.md")
-    left = [l for l in rem_now.splitlines() if re.match(r"^\s*-\s*\[~\]", l) and any(g in l for g in gids)
+    left = [l for l in rem_now.splitlines() if re.match(r"^\s*-\s*\[~\]", l) and any(has_id(g, l) for g in gids)
             and f"@{me}" in l]
     if left:
         miss.append("내 착수 표시 [~]가 아직 남아 있음 — [x]로 바꿔야 함")
+    miss += mr_file_missing(hdir, gids, files, hi)
     if hindex.is_indexed(cfg):
         miss += hindex.missing_index_lines(cfg, files, added, lo, hi)
     if miss:
@@ -283,7 +336,7 @@ if __name__ == "__main__":
     elif a[:1] == ["claim"] and len(a) >= 4:
         claim(cfg, a[1], a[2], a[3], push="--no-push" not in a)
     elif a[:1] == ["check-record"]:
-        check_record(cfg, a[2] if len(a) > 2 and a[1] == "--commit" else "HEAD")
+        check_record(cfg, a[2] if len(a) > 2 and a[1] == "--commit" else None)
     elif a[:1] == ["migrate"]:
         snap, made = hindex.migrate(cfg)
         print(f"[migrate] 완료 — 스냅숏 {snap}\n  " + "\n  ".join(made))

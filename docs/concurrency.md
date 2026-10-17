@@ -4,7 +4,7 @@
 
 | # | 충돌 | 언제 생기나 | 대응 | 장치 | 확인 |
 |---|---|---|---|---|---|
-| 1 | **골 ID 중복 발급** | 두 worktree가 각자 `docs/goals` 최댓값+1로 번호를 정함 | 모든 로컬·원격 브랜치의 `docs/goals` + 공유 장부를 스캔하고, git 공통 폴더에 잠금 파일을 두고 예약 | `goal_gate.py reserve-id` (judge가 사용) | **재현함** (아래), 테스트 `test_concurrent_reservations_do_not_collide` |
+| 1 | **골 ID 중복 발급** | 두 worktree가 각자 `docs/goals` 최댓값+1로 번호를 정함 | 모든 로컬·원격 브랜치의 `docs/goals` + 공유 장부를 스캔하고, git 공통 폴더에 잠금 파일을 두고 예약. 원격(origin)이 있으면 `refs/vibe-ids/G-###`도 원자 push로 예약(push 안 한 다른 복제본과도 안 겹침, 실패 시 발급 거부, `index.id_reserve: "scan"`이면 끔) | `goal_gate.py reserve-id` (judge가 사용) | **재현함** (아래), 테스트 `test_concurrent_reservations_do_not_collide`, `test_two_clones_get_different_ids` |
 | 2 | **같은 골을 두 곳에서 작업** | 사용자가 다른 세션에 같은 요청을 다시 함 | **작업 전 선점** 단계에서 같은 골의 다른 브랜치(로컬·원격)·열린 MR·다른 사람의 7일 이내 착수 표시가 있으면 차단 → 합류하거나 골을 나눈다(사용자 결정) | `handoff.py claim` → `dupe.py`, `mr_check --stage claim/draft` | 테스트 `test_claim_pushes_and_blocks_other_user`, `test_same_goal_on_other_branch_blocks_draft` |
 | 3 | **비슷한 요청이 다른 골로 중복** | 같은 요구가 다른 표현으로 다시 들어옴 | 열린 MR 제목·본문과 골·사용자 가치 문장의 유사도 경고, 「계획 vs 실제」에 중복 아님 근거 기록 | `dupe.py` (gh/glab 있을 때) | 테스트 `test_remote_same_goal_blocks_and_similar_warns` |
 | 4 | **같은 파일 경합** | 다른 골 브랜치가 같은 파일을 고침 | 겹침 경고 + `git merge-tree`로 실제 충돌 예측. 충돌이 예상되면 먼저 머지되는 쪽을 정하고 나중 쪽은 리베이스 후 QA | `dupe.py`, `goal_gate.py overlap` | 테스트 `test_file_overlap_warns_but_passes`, `test_conflicting_branch_is_predicted` |

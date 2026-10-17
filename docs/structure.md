@@ -45,10 +45,10 @@
 | vibe-flow 단계 | 핸드오프 동작 | 명령 |
 |---|---|---|
 | 사전체크 | 읽을 순서대로 읽기, 다른 참여자 변경 요약, 7일 이내 착수 표시·결정 대기·보류·후보 확인 | `handoff.py precheck` |
-| 선점 | fetch → 중복 검사 → 브랜치 → REMAINING 착수 줄 커밋 → push → **push 성공 확인 후에만 탐색** (거부 시 rebase 후 중복 재검사) | `handoff.py claim G-### "<할 일>" <브랜치>` |
+| 선점 | fetch → 중복 검사 → 브랜치 → REMAINING 착수 줄 커밋 → push → **push 성공 확인 후에만 탐색** (거부 시 rebase 후 중복 재검사). 로컬 모드(`origin` 없음 또는 `"remote": false`)는 로컬 커밋만 — `선점(로컬 모드 — 원격 없음): <브랜치>@<sha>` | `handoff.py claim G-### "<할 일>" <브랜치>` |
 | 구현·리뷰·QA | 기록 없음 (진행 상황의 원천은 PR/MR) | - |
 | 보류·무인 멈춤 | REMAINING에 `- [ ] 결정: …` 또는 보류 사유 + PR 링크 | - |
-| QA 뒤, 머지 전 | WORKLOG 토픽 항목 + INDEX 한 줄 + REMAINING `[x]`를 **작업과 같은 커밋**에. QA 결과를 보고 쓰므로 마지막 작업 커밋에 합친다(`git commit --amend`, 이미 push했으면 자기 브랜치에 `--force-with-lease`). 머지 검사는 QA 대상 커밋 이후 기록·골 파일만 바뀐 것을 허용한다 | `handoff.py check-record` (HEAD 한 커밋) |
+| QA 뒤, 머지 전 | WORKLOG 토픽 항목 + INDEX 한 줄 + REMAINING `[x]` + MR 본문 사본 `<핸드오프>/mr/G-###.md`(「리뷰 기록」·「QA 결과」 포함)를 **작업과 같은 커밋**에. QA 결과를 보고 쓰므로 마지막 작업 커밋에 합친다(`git commit --amend`, 이미 push했으면 자기 브랜치에 `--force-with-lease`). 머지 검사는 QA 대상 커밋 이후 기록·골 파일만 바뀐 것을 허용한다 | `handoff.py check-record` (HEAD 한 커밋) |
 | 머지 후 | 골 status `done`. base 기준으로 바꾸되, main 직접 커밋이 금지된 레포는 `chore/G-###-done` 브랜치의 PR로(골 파일만 바꾸는 커밋은 훅이 허용) | - |
 | 실수 | LESSONS `(@작성자, 날짜)` | - |
 
@@ -60,6 +60,7 @@
 docs/handoff/INDEX.md            진입 인덱스 — 문서마다 한 줄: INDEX 경로 · 무엇이 있나 · 언제 본문을 여나
 ├── PLAN.md                      INDEX ─→ PLAN-body.md
 ├── REMAINING.md                 활성 목록(그 자체가 INDEX) ─→ REMAINING-done-YYYY-MM.md
+├── mr/G-###.md                  골별 MR 본문 사본(검증 증거). 세션 시작에 읽지 않음, 링크 검사 제외
 ├── DECISIONS.md                 INDEX ─→ DECISIONS-2026-10.md, DECISIONS-2026-10-2.md, … (결정 날짜의 달마다)
 ├── LESSONS.md                   INDEX ─→ LESSONS-body.md
 ├── NORTHSTAR.md                 INDEX ─→ NORTHSTAR-body.md
@@ -134,7 +135,7 @@ docs/handoff/INDEX.md            진입 인덱스 — 문서마다 한 줄: INDE
 |---|---|
 | `handoff.py migrate` | 예전 구조를 새 구조로(본문 이동 + INDEX 생성 + 원본 스냅숏 `.vibe/migrate/<시각>/`) |
 | `handoff.py verify-migration <스냅숏>` | 무손실 검증: 본문을 원래 순서로 다시 붙여 원본과 바이트 비교, 옮긴 줄의 순서·개수 |
-| `handoff.py archive [--dry]` | 완료 항목·오래된 INDEX 줄·임계값 넘은 본문 이동(링크 유지). **다음 작업 커밋에서 그 작업의 기록을 쓰기 전에** 돌린다 — 이동만 담은 커밋은 기록만 담은 커밋과 같아서 만들지 않는다 |
+| `handoff.py archive [--dry]` | 완료 항목·오래된 INDEX 줄·임계값 넘은 본문 이동(링크 유지). **다음 작업 커밋에서 그 작업의 기록을 쓰기 전에** 돌린다(lint는 HEAD 골의 방금 쓴 `[x]` — HEAD^에 없던 줄 — 은 잔존으로 경고하지 않는다) — 이동만 담은 커밋은 기록만 담은 커밋과 같아서 만들지 않는다 |
 | `handoff.py lint` | INDEX↔본문 불일치, 끊긴 링크, 임계값 초과, 완료 잔존, 결정 상태 어긋남 |
 | `handoff.py precheck` | 읽을 순서(INDEX만) + 자 수 합 + 기존 사전체크 |
 | `handoff.py next-id D\|L` | 번호 발급(위) |

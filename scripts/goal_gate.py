@@ -14,6 +14,7 @@
 import datetime
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -148,7 +149,28 @@ def reserve_id():
     else:
         die("[goal-gate] 골 ID 잠금을 얻지 못했습니다.")
     try:
-        gid = f"G-{max(all_known_ids() | {0}) + 1:03d}"
+        import hindex  # D-/L-와 같은 원격 원자 예약(refs/vibe-ids/G-###) — push 안 한 다른 복제본과도 겹치지 않게
+        cfg = vf_git.config()   # "remote": false(로컬 모드)면 claim·next_id처럼 원격 예약을 하지 않는다
+        remote = ("origin" in git("remote").split() and cfg.get("remote", True) is not False
+                  and hindex.icfg(cfg)["id_reserve"] == "remote")
+        if remote:
+            git("fetch", "-q", "origin")
+        nums = all_known_ids() | (hindex.remote_reserved("G") if remote else set())
+        n = max(nums | {0}) + 1
+        if remote:
+            empty = hindex.run_git(["hash-object", "-t", "tree", "-w", "--stdin"], "")
+            for _ in range(20):
+                c = git("commit-tree", empty, "-m", f"reserve G-{n:03d} by {vf_git.me()} {time.time()}")
+                r = hindex.subprocess_push(c, f"G-{n:03d}")
+                if r == "ok":
+                    break
+                if r != "taken":
+                    die(f"[goal-gate] 원격 골 ID 예약 실패({r}) — 번호를 내주지 않습니다. 네트워크·권한을 확인하세요.\n"
+                        "  원격 예약을 끄려면 .vibe-flow.json \"index\": {\"id_reserve\": \"scan\"}")
+                n += 1
+            else:
+                die("[goal-gate] 원격 골 ID 예약 20회 충돌")
+        gid = f"G-{n:03d}"
         with open(os.path.join(common_dir(), "goal-ids.txt"), "a", encoding="utf-8") as f:
             f.write(gid + "\n")
         return gid
@@ -179,9 +201,46 @@ def overlap():
         print("[overlap] 겹치는 브랜치 없음")
 
 
+def reverted_tree(sha):
+    """HEAD에 <sha>의 정확한 역 패치를 적용한 트리. 임시 인덱스에서만 하고, 실패(루트 커밋·충돌·빈 diff)면 ""."""
+    def run(args, env=None, inp=None):
+        return subprocess.run(["git", *args], input=inp, capture_output=True, env=env)
+    d = run(["-c", "diff.noprefix=false", "diff", "--binary", "--full-index", "--no-color", "--no-ext-diff",
+             "--no-textconv", "--no-relative", sha, sha + "^"])   # 공백 무시 없음 — 바이트 그대로의 역
+    if d.returncode or not d.stdout.strip():
+        return ""
+    tmp = tempfile.mkdtemp(prefix="vf-revert-")
+    try:
+        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(tmp, "index"))
+        if run(["read-tree", "HEAD"], env).returncode:
+            return ""
+        if run(["apply", "--cached", "--whitespace=nowarn", "-p1"], env, d.stdout).returncode:
+            return ""
+        t = run(["write-tree"], env)
+        return t.stdout.decode().strip() if not t.returncode else ""
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def real_merge_or_revert(msg):
+    """진짜 머지(훅 시점에 MERGE_HEAD 있음) 또는 진짜 되돌리기만 면제. 제목·본문 형식만으로는 안 된다.
+    되돌리기 = 스테이징된 트리가 HEAD에 본문이 가리키는 커밋의 정확한 역을 적용한 트리와 같음.
+    patch-id는 공백을 무시해(파이썬 들여쓰기) 쓰지 않는다. 루트 커밋·적용 실패는 면제 없음."""
+    if os.path.exists(git("rev-parse", "--git-path", "MERGE_HEAD") or ".git/MERGE_HEAD"):
+        return True
+    m = re.search(r"^This reverts commit ([0-9a-f]{7,40})\b", msg, re.M)
+    if not m or subprocess.run(["git", "cat-file", "-e", m.group(1) + "^{commit}"], capture_output=True).returncode:
+        return False
+    head = git("rev-parse", "-q", "--verify", "HEAD^{tree}")
+    staged = subprocess.run(["git", "write-tree"], capture_output=True, text=True)   # 훅이 받은 GIT_INDEX_FILE 그대로
+    expected = reverted_tree(m.group(1))
+    return (bool(head) and not staged.returncode and bool(expected)
+            and expected != head and staged.stdout.strip() == expected)
+
+
 def check_commit(msg_file):
     msg = read(msg_file)
-    if msg.startswith(("Merge ", "Revert ")):
+    if real_merge_or_revert(msg):
         return
     branch = git("symbolic-ref", "--short", "-q", "HEAD") or git("rev-parse", "--abbrev-ref", "HEAD")
     ids = set(ID_RE.findall(msg)) | set(ID_RE.findall(branch))
@@ -206,6 +265,20 @@ def check_commit(msg_file):
         die("[goal-gate] " + "; ".join(bad))
 
 
+HOOK_MARK = "# vibe-flow goal_gate hook v1"   # 우리 생성기만 쓰는 줄. 이 줄이 있어야 우리 훅
+OLD_HOOKS = (  # 표식 이전에 생성하던 정확한 본문(업그레이드용). 스크립트 경로만 다를 수 있다
+    re.compile(r'#!/bin/sh\nexec python "[^"\n]*goal_gate\.py" check-commit "\$1"\n'),
+    re.compile(r'#!/bin/sh\nL="\$\(dirname "\$0"\)/commit-msg\.local"\n'
+               r'if \[ -[xf] "\$L" \]; then "\$L" "\$@" \|\| exit \$\?; fi\n'
+               r'exec python "[^"\n]*goal_gate\.py" check-commit "\$1"\n'),
+)
+
+
+def ours(text):
+    """goal_gate.py라는 글자만으로는 안 된다 — 표식 줄이 있거나 예전 생성 본문과 정확히 같아야 우리 훅."""
+    return HOOK_MARK in text.splitlines() or any(r.fullmatch(text) for r in OLD_HOOKS)
+
+
 def install_hook():
     hooks = git("rev-parse", "--git-path", "hooks")
     if not hooks:
@@ -213,8 +286,20 @@ def install_hook():
     os.makedirs(hooks, exist_ok=True)
     script = os.path.abspath(__file__).replace("\\", "/")
     path = os.path.join(hooks, "commit-msg")
+    local = path + ".local"
+    if os.path.exists(path) and not ours(read(path)):  # 남의 훅: 지우지 않고 .local로 옮겨 먼저 실행
+        if os.path.exists(local):
+            die(f"[goal-gate] {path}와 {local}가 모두 있습니다. 덮어쓰지 않습니다 — 하나로 합친 뒤 다시 실행하세요.")
+        live = os.name == "nt" or os.access(path, os.X_OK)   # Windows git은 실행 비트를 안 본다
+        os.replace(path, local)
+        print(f"기존 훅 보존: {local} " + ("(골 게이트보다 먼저 실행)" if live else
+              "(실행 권한 없음 — git이 실행하지 않던 훅이라 연결하지 않음. chmod +x 하면 연결됨)"))
     with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(f'#!/bin/sh\nexec python "{script}" check-commit "$1"\n')
+        f.write('#!/bin/sh\n'
+                f'{HOOK_MARK}\n'
+                'L="$(dirname "$0")/commit-msg.local"\n'
+                'if [ -x "$L" ]; then "$L" "$@" || exit $?; fi\n'   # git이 실행했을 훅만 (실행 권한 없는 건 건너뜀)
+                f'exec python "{script}" check-commit "$1"\n')
     os.chmod(path, 0o755)
     print(path)
 
@@ -240,8 +325,10 @@ def run_codex(prompt):
         with open(pf, "w", encoding="utf-8") as f:
             f.write(prompt)
         with open(pf, encoding="utf-8") as stdin:
-            subprocess.run(["codex", "exec", "--skip-git-repo-check", "-o", of], stdin=stdin,
-                           capture_output=True, timeout=900, shell=(os.name == "nt"))
+            r = subprocess.run(vf_git.codex_cmd(of), stdin=stdin,
+                               capture_output=True, timeout=900, shell=(os.name == "nt"))
+        if r.returncode != 0:   # 실패한 실행이 남긴 VERDICT는 판정으로 쓰지 않는다
+            return ""
         return read(of) if os.path.exists(of) else ""
 
 

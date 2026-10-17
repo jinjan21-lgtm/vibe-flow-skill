@@ -143,9 +143,17 @@ def decision_bodies(L):
                   key=body_key)
 
 
-def topic_files(L):
+ARCHIVED_TOPIC_RE = re.compile(r"^(.+)-\d{4}-\d{2}(?:-\d+)?\.md$")
+
+
+def topic_files(L, archived_too=False):
+    """활성 토픽 파일(archive·크기 경고용). archive_topic이 만든 보관 파일(<topic>-YYYY-MM[-n].md, <topic>.md가 있을 때)은 뺀다.
+    archived_too=True면 보관 파일도 — lint의 INDEX 대조·링크 무결성은 보관 파일까지 본다."""
+    def archived(p):
+        m = ARCHIVED_TOPIC_RE.match(os.path.basename(p))
+        return bool(m) and os.path.exists(os.path.join(os.path.dirname(p), m.group(1) + ".md"))
     return sorted(p.replace("\\", "/") for p in glob.glob(f"{L['worklog']}/*.md")
-                  if not os.path.basename(p).startswith("INDEX"))
+                  if not os.path.basename(p).startswith("INDEX") and (archived_too or not archived(p)))
 
 
 def goal_files(L):
@@ -279,12 +287,63 @@ def append_with_context(path, title, groups):
     wr(path, text)
 
 
+def split_decisions(t, h, ic):
+    """DECISIONS.md 원문 → ([(본문 파일, 텍스트)], {달: [INDEX 줄]}). 이어 붙이면 원문과 바이트가 같다."""
+    blocks = decision_blocks(t)
+    first = DEC_HEAD_RE.search(t)
+    header = t[:first.start()] if first else t
+    per, cap = ic["decisions_per_file"], ic["body_max_chars"]
+    out, idx_lines, parts = [], {}, {}
+    cur, cur_text, cur_n = None, header, 0
+    for did, title, blk in blocks:
+        mon = decision_month(blk)
+        if cur is None or mon != cur[0] or cur_n >= per or (cur_n and len(cur_text) + len(blk) > cap):
+            if cur is not None:
+                out.append((cur[1], cur_text))
+                cur_text = ""
+            parts[mon] = parts.get(mon, 0) + 1
+            cur, cur_n = (mon, body_name(h, mon, parts[mon])), 0
+        cur_text += blk
+        cur_n += 1
+        idx_lines.setdefault(mon, []).append(decision_line(did, title, blk, cur[1]))
+    if cur is not None:
+        out.append((cur[1], cur_text))
+    elif header:  # 결정이 없어도 머리말(제목·정책)은 본문 파일로 옮긴다
+        out.append((body_name(h, TODAY.strftime("%Y-%m"), 1), header))
+    return out, idx_lines
+
+
+def migrate_targets(L, ic):
+    """migrate가 새로 만들 파일(덮어쓰거나 이어 쓰면 원본이 사라지거나 섞인다)."""
+    h, out = L["hdir"], []
+    if os.path.exists(L["decisions"]):
+        out += [n for n, _ in split_decisions(rd(L["decisions"]), h, ic)[0]]
+    out += [L[k][:-3] + "-body.md" for k in ("plan", "northstar", "lessons") if os.path.exists(L[k])]
+    if os.path.exists(L["remaining"]):
+        ls = lines_keep(rd(L["remaining"]))
+        out += sorted({f"{h}/REMAINING-done-{block_month(''.join(ls[s:e]))}.md" for s, e, _ in done_blocks(ls)})
+    if os.path.exists(L["worklog_index"]):
+        ls = lines_keep(rd(L["worklog_index"]))
+        items = [i for i, l in enumerate(ls) if re.match(r"^- \d{4}-\d{2}-\d{2}", l)]
+        cur = TODAY.strftime("%Y-%m")
+        move = set(items[ic["worklog_index_lines"]:]) | {i for i in items if ls[i][2:9] < cur}
+        out += sorted({f"{L['worklog']}/INDEX-{ls[i][2:9]}.md" for i in move})
+    if os.path.isdir(L["goals"]):
+        out += [L["goals_index"], f"{L['goals']}/INDEX-done.md"]
+    out.append(L["entry"])
+    return out
+
+
 # ---------- migrate ----------
 def migrate(cfg):
     L = layout(cfg)
     ic = icfg(cfg)
     if is_indexed(cfg):
         raise SystemExit(f"[migrate] 이미 인덱스 구조입니다 ({L['entry']})")
+    clash = [p for p in migrate_targets(L, ic) if os.path.exists(p)]
+    if clash:  # 하나라도 겹치면 아무것도 바꾸지 않는다(스냅숏도 만들지 않음)
+        raise SystemExit("[migrate] 중단 — 만들 파일이 이미 있음(덮어쓰면 원본이 사라진다). 옮기거나 이름을 바꾼 뒤 다시:\n  "
+                         + "\n  ".join(clash))
     ts = time.strftime("%Y%m%d-%H%M%S")
     snap = f".vibe/migrate/{ts}"
     manifest = {"hdir": L["hdir"], "files": {}, "line_moves": {}, "added": {}, "moves": {}}
@@ -301,26 +360,10 @@ def migrate(cfg):
     # 원래 순서대로 이어 가며 나누므로, 만든 순서대로 이어 붙이면 원문(머리말 포함)과 바이트가 같다.
     if os.path.exists(L["decisions"]):
         t = rd(L["decisions"])
-        blocks = decision_blocks(t)
-        first = DEC_HEAD_RE.search(t)
-        header = t[:first.start()] if first else t
-        per, cap = ic["decisions_per_file"], ic["body_max_chars"]
-        bodies, idx_lines, parts = [], {}, {}
-        cur, cur_text, cur_n = None, header, 0
-        for did, title, blk in blocks:
-            mon = decision_month(blk)
-            if cur is None or mon != cur[0] or cur_n >= per or (cur_n and len(cur_text) + len(blk) > cap):
-                if cur is not None:
-                    wr(cur[1], cur_text)
-                    cur_text = ""
-                parts[mon] = parts.get(mon, 0) + 1
-                cur, cur_n = (mon, body_name(h, mon, parts[mon])), 0
-                bodies.append(cur[1])
-            cur_text += blk
-            cur_n += 1
-            idx_lines.setdefault(mon, []).append(decision_line(did, title, blk, cur[1]))
-        if cur is not None:
-            wr(cur[1], cur_text)
+        parts_txt, idx_lines = split_decisions(t, h, ic)
+        bodies = [n for n, _ in parts_txt]
+        for n, txt in parts_txt:
+            wr(n, txt)
         manifest["moves"][L["decisions"]] = bodies
         out = marker("DECISIONS") + "# 결정 INDEX\n\n"
         out += ("> 한 줄 = 결정 하나. 본문은 링크로 연다. **새 결정**: `handoff.py next-id D`로 번호를 받고, 안내된 본문 파일 끝에 "
@@ -685,6 +728,17 @@ def replaced_set(rows):
 
 
 # ---------- lint ----------
+def fresh_done_lines(rem):
+    """방금 쓴 완료 줄: HEAD^의 REMAINING에 없고(이번 기록 커밋이나 amend 전 작업 트리에서 추가)
+    줄의 골 ID가 HEAD 메시지나 지금 브랜치에 있다. archive는 다음 작업 커밋에서 기록 쓰기 전에 하므로 경고하지 않는다."""
+    ids = set(re.findall(r"\bG-\d{3,}\b", vf_git.git("log", "-1", "--format=%s%n%b") + " " + vf_git.current_branch()))
+    if not ids or not os.path.exists(rem):
+        return set()
+    old = {x.rstrip() for x in vf_git.git("show", f"HEAD^:{rem}").splitlines()}
+    return {l for l in lines_keep(rd(rem)) if DONE_RE.match(l) and l.rstrip() not in old
+            and any(re.search(rf"\b{re.escape(g)}(?![0-9A-Za-z])", l) for g in ids)}
+
+
 def lint(cfg):
     L = layout(cfg)
     ic = icfg(cfg)
@@ -756,11 +810,12 @@ def lint(cfg):
     # WORKLOG
     if os.path.isdir(L["worklog"]):
         it = idx_text(*glob.glob(f"{L['worklog']}/INDEX*.md"))
-        for tp in topic_files(L):
+        active = set(topic_files(L))
+        for tp in topic_files(L, archived_too=True):  # INDEX 대조는 보관 파일까지, 크기 경고는 활성 파일만
             for m in re.finditer(r"^## .*\{#([^}\s]+)\}", rd(tp), re.M):
                 if f"#{m.group(1)})" not in it and f"#{m.group(1)}]" not in it:
                     err.append(f"WORKLOG {os.path.basename(tp)}#{m.group(1)}가 INDEX에 없음")
-            if len(rd(tp)) > ic["topic_max_chars"]:
+            if tp in active and len(rd(tp)) > ic["topic_max_chars"]:
                 warn.append(f"WORKLOG {os.path.basename(tp)} {len(rd(tp))}자 > {ic['topic_max_chars']} → handoff.py archive")
         if os.path.exists(L["worklog_index"]):
             items = re.findall(r"^- (\d{4}-\d{2})-\d{2}", rd(L["worklog_index"]), re.M)
@@ -786,7 +841,8 @@ def lint(cfg):
     # REMAINING
     if os.path.exists(L["remaining"]):
         ls = lines_keep(rd(L["remaining"]))
-        nd = len(done_blocks(ls))
+        fresh = fresh_done_lines(L["remaining"])
+        nd = sum(1 for s, _, _ in done_blocks(ls) if ls[s] not in fresh)
         if nd:
             warn.append(f"REMAINING에 완료 항목 {nd}건 잔존 → handoff.py archive")
         act = sum(1 for l in ls if OPEN_RE.match(l))
@@ -795,6 +851,8 @@ def lint(cfg):
     # 링크
     for p in glob.glob(f"{h}/**/*.md", recursive=True):
         p = p.replace("\\", "/")
+        if p.startswith(f"{h}/mr/"):  # MR 본문 사본: 캡처 링크가 추적 안 하는 .vibe/를 가리킬 수 있다
+            continue
         base = os.path.dirname(p)
         for t in links_of(rd(p)):
             path, _, anc = t.partition("#")
@@ -915,7 +973,8 @@ def remote_reserved(kind):
 def next_id(kind, cfg, scan_only=False):
     """반환: (ID, 안내 문자열). 원격 예약 실패 시 SystemExit."""
     ic = icfg(cfg)
-    remote = "origin" in vf_git.git("remote").split() and ic["id_reserve"] == "remote" and not scan_only
+    remote = ("origin" in vf_git.git("remote").split() and ic["id_reserve"] == "remote" and not scan_only
+              and (cfg or {}).get("remote", True) is not False)
     lock = os.path.join(common_dir(), f"ids-{kind}.lock")
     for _ in range(100):
         try:

@@ -18,7 +18,7 @@ description: Use when a reviewed goal MR needs QA before merge or deploy, when t
 1. 코드: `.vibe-flow.json`의 `test_cmd` 전체. 통과/전체·시간. 실패는 같은 명령으로 2회까지 다시, 그래도 실패면 `코드: 실패`.
 2. 화면 판단: `ui_globs`에 걸린 파일이 있으면 브라우저 필수. 안 걸려도 화면에 닿는 코드면 브라우저. 닿지 않으면 **이유를 적는다** — `브라우저: 해당 없음 — <이유>`. 이유 없는 「해당 없음」은 `--stage merge`가 막는다.
 3. 브라우저: Aside로 완료 조건 시나리오 + 공유 화면, 역할별. 캡처는 qa-run의 `QA.shot` + `crop.py`. 로그인 만료·환경 장애는 `미검증` = 머지 금지.
-4. 「QA 결과」: 대상 commit 또는 tree(`vf_git.snapshot`), 환경·역할, 코드, 브라우저, 증거, 미검증 항목.
+4. 「QA 결과」(`.vibe/mr-G-###.md` — 레포 루트에 두면 QA 대상 비교가 깨진다): 대상 commit 또는 tree(`vf_git.snapshot`), 환경·역할, 코드, 브라우저, 증거, 미검증 항목. 확인된 「완료 조건」은 `[x]`로(미체크가 남으면 merge 금지). 이 본문은 기록 커밋에 `<핸드오프>/mr/G-###.md`로 남는다.
 5. 다음은 **vibe-record**(기록을 마지막 작업 커밋에 합침). 기록만 바뀐 것은 QA를 깨지 않는다. 코드가 바뀌면 QA를 다시 한다.
 
 ## Red Flags

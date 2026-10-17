@@ -7,8 +7,8 @@
 ```bash
 S=~/.claude/skills/vibe-flow
 mkdir -p docs/goals && cp $S/templates/NORTHSTAR.md docs/ && cp $S/templates/G-000-maintenance.md docs/goals/
-python $S/scripts/goal_gate.py install-hook
-echo '.vibe/' >> .gitignore                 # MR 본문·리뷰 기록 등 로컬 작업 파일
+python $S/scripts/goal_gate.py install-hook   # 기존 commit-msg 훅은 commit-msg.local로 옮겨 먼저 실행
+echo '.vibe/' >> .gitignore                 # MR 본문(.vibe/mr-G-###.md)·리뷰 기록 등 로컬 작업 파일. MR 본문을 레포 루트에 두지 않는다(QA 대상 비교가 깨짐)
 echo '{"base":"main","test_cmd":"npm test","dev_url":"https://dev.example.com"}' > .vibe-flow.json
 ```
 
@@ -64,8 +64,10 @@ cp $S/templates/design-system.md docs/
 | `dev_url` | - | QA 브라우저 단계 주소 |
 | `ui_globs` | tsx·jsx·vue·css·html·pages·routes·components | 브라우저 QA 필수·디자인시스템 참조 판정 |
 | `design_system` | `docs/design-system.md` | 디자인시스템 문서 |
+| `codex_effort` | `high` | 골 판정·설계 확인·리뷰의 Codex 추론 강도(이 호출에만 `-c model_reasoning_effort=`로 전달, `~/.codex` 설정은 그대로). `""`이면 Codex 기본값 |
 | `design_skip` | `{"max_lines": 50, "max_files": 3}` | 이 이하면 설계 확인 생략 가능 |
 | `claim_days` | 7 | 착수 표시 유효 기간 |
+| `remote` | 자동 (`origin` 있으면 원격 모드) | `false`면 로컬 모드 — claim은 로컬 커밋만, next-id 원격 예약 안 함 |
 | `max_lines` / `max_files` | 400 / 10 | review 단계 크기 경고 |
 | `ui_unclear_needs_reason` | `true` | 글롭에 안 걸린 코드 변경이면 QA 브라우저 줄에 「해당 없음 — 이유」 필요 |
 | `mr_labels` | 없음 | MR 제목·라벨 별칭. 예: `{"Design": "설계", "Approach": "접근 방식"}` |
