@@ -26,7 +26,7 @@
 
 ## 3회차 — 여러 파일 버그 수정 · 회귀 위험 기능 (편향 제거판)
 
-지난 실험의 편향(vibe-flow 쪽 노스스타에만 "기존 결과 변경은 결정 필요")을 없앴다. 새 저장소는 작은 호텔 예약·청구 라이브러리(`dates`·`money`·`rooms`·`bookings`·`billing`·`reports`, 테스트 9개). **두 군의 저장소 파일은 같다**(노스스타 중립문 포함). vibe-flow 군에는 실험 전에 내가 도구 설치 커밋(`.claude/skills`·`.vibe-flow.json`·`G-000`·커밋 훅)만 더했고, 골 G-001·설계·MR은 에이전트가 스킬 절차로 직접 만들었다. 지시문은 같고(vibe-flow 군만 "이 흐름대로" 한 문단 추가) 시간 한도 25분, 채점기·정답 구현은 에이전트가 닿지 않는 폴더에 두었다.
+지난 실험의 편향(vibe-flow 쪽 노스스타에만 "기존 결과 변경은 결정 필요")을 없앴다. 새 저장소는 작은 호텔 예약·청구 라이브러리(`dates`·`money`·`rooms`·`bookings`·`billing`·`reports`, 테스트 9개). **두 군의 저장소 파일은 같다**(노스스타 중립문 포함). 단, vibe-flow 군에만 도구 설치 커밋의 `docs/goals/G-000-maintenance.md`(유지보수 골 템플릿)가 추가로 있었다 — 엄밀한 문서 동일성은 아니다(다음 실험에서는 양쪽에 두거나 에이전트가 만들게). vibe-flow 군에는 실험 전에 내가 도구 설치 커밋(`.claude/skills`·`.vibe-flow.json`·`G-000`·커밋 훅)만 더했고, 골 G-001·설계·MR은 에이전트가 스킬 절차로 직접 만들었다. 지시문은 같고(vibe-flow 군만 "이 흐름대로" 한 문단 추가) 시간 한도 25분, 채점기·정답 구현은 에이전트가 닿지 않는 폴더에 두었다.
 
 - **과제 3 (버그 신고):** 월·연 경계 숙박이 0박·0원으로 청구되고, 같은 날 체크아웃·체크인이 거절된다. 원인은 `billing`(일(day) 숫자 뺄셈)과 `dates.overlaps`(`<=`) 두 파일.
 - **과제 4 (기능 요청):** 장기 할인 단계(7~13박 10%·14박+ 15%), 법인 5% 추가, **할인만** 0.5원 올림. 공용 `money.won()`(파이썬 `round`, 세금·ADR에도 쓰임)을 고치면 세금·ADR이 바뀌는 회귀 함정 — 숨은 테스트가 세금·ADR 0.5 경우를 본다.
@@ -44,16 +44,16 @@
 
 ### 3회차에서 드러난 vibe-flow 결함과 재실행
 
-| 관찰(실행) | 원인 | 수정 |
-|---|---|---|
-| 작은 변경 생략 → 리뷰 단계에서 66줄·5파일로 막힘(t3v1·t4v2) | 크기에 선점 커밋의 골 파일·REMAINING까지 셈 | 크기는 핸드오프·골 폴더 제외(코드만). 생략엔 구현 전 「예상 N줄·M파일」 필수, build 단계에서 초과 검사 |
-| 구현 뒤 설계 확인에서 Codex가 고쳐진 코드를 보고 "버그 없음" blocker(t3v1, stash로 우회) | 설계 확인이 작업 트리 파일을 읽음 | 기준 커밋 파일을 읽음. 이미 구현이 갈라졌으면 `d<N>.meta`에 남기고 review 단계가 「- 순서: 구현 선행」 줄 요구 |
-| 단계 검사가 막혔는데 리뷰 라운드가 돎(t3v1) | review.py가 단계를 검사하지 않음 | review.py가 mr_check 단계 검사를 직접 |
-| MR 본문을 루트에 두면 QA 스냅숏과 어긋남(t3v2), MR·리뷰 증거가 `.vibe/`에만 남음 | 위치 규칙 없음 | 작업 중 `.vibe/mr-G-###.md`, 기록 커밋에 `<핸드오프>/mr/G-###.md` 필수(check-record) |
-| 리뷰가 전부 `VERDICT: CONFIRM` 한 줄, 10초 안팎 | 근거 형식 없음 + 이 PC Codex 기본 추론 강도 none | 완료 조건마다 `CHECKED: 조건 — 파일:줄/테스트` 필수(부족하면 무효), Codex 호출에 `model_reasoning_effort=high`(설정 `codex_effort`) |
-| 완료 조건 미체크인데 QA 통과(t4v1·t4v2) | merge 검사가 체크박스를 안 봄 | merge 단계에서 「완료 조건」 미체크 차단 |
-| 원격 없음 → 에이전트가 「push 대신 로컬 커밋」을 즉석에서 정함 | 로컬 모드 없음 | 원격 없음(또는 `"remote": false`)이면 공식 로컬 모드 |
-| 매 흐름 끝 REMAINING 완료 잔존 lint 경고(4명) | 흐름이 쓴 [x] 줄을 바로 경고 | HEAD에서 막 쓴 이번 골 [x] 줄은 경고 안 함 |
+| 관찰(실행) | 원인 | 수정 | 실패 먼저 확인한 테스트 |
+|---|---|---|---|
+| 작은 변경 생략 → 리뷰 단계에서 66줄·5파일로 막힘(t3v1·t4v2) | 크기에 선점 커밋의 골 파일·REMAINING까지 셈 | 크기는 핸드오프·골 폴더 제외(코드만). 생략엔 구현 전 「예상 N줄·M파일」 필수, build 단계에서 초과 검사 | `test_c2_design.SkipSizeTest`, `SkipPreGateTest` |
+| 구현 뒤 설계 확인에서 Codex가 고쳐진 코드를 보고 "버그 없음" blocker(t3v1, stash로 우회) | 설계 확인이 작업 트리 파일을 읽음 | 기준 커밋 파일을 읽음. 이미 구현이 갈라졌으면 `d<N>.meta`에 남기고 review 단계가 「- 순서: 구현 선행」 줄 요구 | `test_c2_design.DesignBaseTreeTest` |
+| 단계 검사가 막혔는데 리뷰 라운드가 돎(t3v1) | review.py가 단계를 검사하지 않음 | review.py가 mr_check 단계 검사를 직접 | `test_c2_design.StageGateInReviewTest` |
+| MR 본문을 루트에 두면 QA 스냅숏과 어긋남(t3v2), MR·리뷰 증거가 `.vibe/`에만 남음 | 위치 규칙 없음 | 작업 중 `.vibe/mr-G-###.md`, 기록 커밋에 `<핸드오프>/mr/G-###.md` 필수(check-record) | `test_c2_record.RecordMrFileTest`, `TeamRecordMrFileTest` |
+| 리뷰가 전부 `VERDICT: CONFIRM` 한 줄, 10초 안팎 | 근거 형식 없음 + 이 PC Codex 기본 추론 강도 none | 완료 조건마다 `CHECKED: 조건 — 파일:줄/테스트` 필수(부족하면 무효), Codex 호출에 `model_reasoning_effort=high`(설정 `codex_effort`) | `test_c2_design.CheckedEvidenceTest`, `NumberedCheckedTest`, `test_audit_goal.CodexEffortTest` |
+| 완료 조건 미체크인데 QA 통과(t4v1·t4v2) | merge 검사가 체크박스를 안 봄 | merge 단계에서 「완료 조건」 미체크 차단 | `test_c2_design.UncheckedConditionMergeTest` |
+| 원격 없음 → 에이전트가 「push 대신 로컬 커밋」을 즉석에서 정함 | 로컬 모드 없음 | 원격 없음(또는 `"remote": false`)이면 공식 로컬 모드 | `test_c2_record.LocalModeClaimTest` |
+| 매 흐름 끝 REMAINING 완료 잔존 lint 경고(4명) | 흐름이 쓴 [x] 줄을 바로 경고 | HEAD에서 막 쓴 이번 골 [x] 줄은 경고 안 함 | `test_c2_record.LintFreshDoneTest` |
 
 **재실행(수정 뒤, 같은 과제·같은 지시문):** 과제 3·4 각 3명(t3v3·t3v4·t3v5, t4v3·t4v4·t4v5, 그중 v5 둘은 Codex 추론 강도 high 적용 뒤). 6명 모두 숨은 테스트 12/12, 기록 커밋에 `docs/mr/G-001.md`, 완료 조건 미체크 0, 리뷰 근거 줄이 완료 조건 수만큼(파일:줄·테스트 이름 인용), 원격 없음은 로컬 모드로 처리, 사람 결정 대기로 멈춘 곳 없음, 걸린 시간 4~7분. 설계 확인 생략은 예상치를 적고 build 검사를 통과한 경우에만 쓰였다. 리뷰는 여전히 모두 1라운드 무지적 — 리뷰가 결함을 잡는 힘은 이 실험에서 측정되지 않았다(결함 주입 실험이 필요).
 
@@ -71,7 +71,7 @@
 - 리뷰가 두 회차 모두 1라운드 무지적 — 리뷰 루프가 코드 결함을 잡는 효과는 이 실험에서 관찰되지 않았다(설계 확인은 두 번 다 실제 공백을 찾았다)
 - 시간 비용이 크다(작은 일 기준 약 3~6배). 작은 변경 생략 기준(50줄·3파일)으로 설계 확인을 건너뛸 수 있지만 리뷰·QA는 그대로다
 
-**두 번째 재실행(게이트를 실제 증거에 묶은 뒤, t3v6·t4v6):** 설계·리뷰 「확정」을 Codex 기록과 대조, 리뷰 뒤 코드 변경 재리뷰, QA는 `qa_run.py` 실행 기록, 기록 커밋에 `mr/G-001.md`·`mr/G-001-qa.json`. 두 명 모두 스크립트에 막힌 곳 없이 merge 검사까지 통과, 숨은 테스트 12/12, 3~4분. t4v6에서는 설계 확인이 major 1건(두 할인 뒤 세금 검증 테스트 누락)을 실제로 잡아 테스트 계획에 반영됐다. 드러난 결함 1건: `qa_run.py --mr`이 결과 줄을 템플릿 안내 주석 속 예시 줄 자리에 넣음(둘 다 보고) → 주석 밖에만 쓰도록 수정(RED → GREEN).
+**두 번째 재실행(게이트를 실제 증거에 묶은 뒤, t3v6·t4v6):** 설계·리뷰 「확정」을 Codex 기록과 대조, 리뷰 뒤 코드 변경 재리뷰, QA는 `qa_run.py` 실행 기록, 기록 커밋에 `mr/G-001.md`·`mr/G-001-qa.json`. 두 명 모두 스크립트에 막힌 곳 없이 merge 검사까지 통과, 숨은 테스트 12/12, 3~4분. t4v6에서는 설계 확인이 major 1건(두 할인 뒤 세금 검증 테스트 누락)을 실제로 잡아 테스트 계획에 반영됐다. 드러난 결함 1건: `qa_run.py --mr`이 결과 줄을 템플릿 안내 주석 속 예시 줄 자리에 넣음(둘 다 보고) → 주석 밖에만 쓰도록 수정(RED → GREEN, `test_c2_qa.RunAndRecordTest.test_mr_option_leaves_template_comment_alone`).
 
 ## 리뷰 검출력 — 결함 주입 (2026-10-17)
 
