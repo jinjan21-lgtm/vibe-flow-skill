@@ -55,6 +55,7 @@ class ReviewCodexFailureTest(ts.Repo):
         super().setUp()
         sh("git", "checkout", "-q", "-b", "G-001/test", cwd=self.d)   # review.py가 --stage review를 직접 검사한다
         import vf_git
+        self.write("docs/DECISIONS.md", "# 결정\n\n## D-001 설계 판정\n- G-001 설계는 사람이 확정\n")   # MR_OK의 사람 판정 D-001
         self.write(".vibe-flow.json", '{"base": "%s"}' % vf_git.snapshot())
         self.write("mr.md", ts.MR_OK.format(plan="같음", review="", qa=""))
         self.write(".gitignore", ".vibe/\nmr.md\nfakebin/\n")

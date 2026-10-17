@@ -302,7 +302,8 @@ def main():
                      f"판정을 적지 않습니다 ({out}.failed).\n" + "\n".join(f" - {c}" for c in bad)
                      + "\n→ 같은 라운드 1을 다시 돌립니다.")
     with open(os.path.join(D, f"r{n}.tree"), "w", encoding="utf-8") as f:
-        f.write(f"{cur}\n" + mr_check.record_stamp(goal, vf_git.config()))
+        f.write(f"{cur}\n" + mr_check.record_stamp(goal, vf_git.config())
+                + f"conds: {mr_check.completion_hash(mr)}\n")   # 리뷰 뒤 완료 조건이 바뀌면 qa·merge가 막는다
     fs = findings(text)
     checked = len(re.findall(r"^CHECKED:\s*\S", text, re.M))
     count = {}

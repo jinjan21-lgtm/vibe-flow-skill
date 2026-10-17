@@ -19,7 +19,7 @@ description: Use when a goal (G-###) MR has passed QA and its handoff records mu
 |---|---|---|
 | 작업 기록 | `WORKLOG/<topic>.md` 항목(`@작성자`, 앵커 `-작성자`) | `WORKLOG/INDEX.md` 한 줄 |
 | 남은 일 | REMAINING `[~]` → `[x] (@나 날짜)` | (REMAINING이 INDEX) |
-| 검증 증거 | `.vibe/mr-G-###.md` → `<핸드오프>/mr/G-###.md`(채운 그대로), `.vibe/qa/<tree>.json`(QA 대상 tree) → `<핸드오프>/mr/G-###-qa.json`. G-000 제외 | — |
+| 검증 증거 | `python $S/handoff.py export-evidence G-###` → `<핸드오프>/mr/G-###.md`·`-qa.json`·`-review.md`(MR·QA 기록·리뷰 원문). G-000 제외 | — |
 | 결정 | `python $S/handoff.py next-id D` → 안내된 본문 파일 끝에 `## D-nnn` 블록 | `DECISIONS.md` 끝에 한 줄(`#화면 태그`, 뒤집으면 `대체 D-kkk`) |
 | 교훈 | `next-id L` → `LESSONS-body.md` 끝 | `LESSONS.md` 한 줄 |
 
@@ -29,7 +29,7 @@ description: Use when a goal (G-###) MR has passed QA and its handoff records mu
 
 1. 위 표대로 쓴다. INDEX 줄은 추가만.
 2. 골 작업: 마지막 작업 커밋에 합친다 — `git commit --amend`(이미 push했으면 자기 브랜치에 `--force-with-lease`).
-3. `python $S/handoff.py check-record`(MR·QA 기록 사본 검사 — `.vibe/`는 커밋을 받은 사람이 못 본다) → `python $S/handoff.py lint`. lint가 빠진 INDEX 줄을 출력하면 그대로 붙인다.
+3. `python $S/handoff.py check-record`(증거 사본 검사 — `.vibe/`는 남이 못 본다) → `python $S/handoff.py lint`. lint가 빠진 INDEX 줄을 출력하면 그대로 붙인다.
 4. 골 작업: `python $S/mr_check.py <mr> --stage merge` 통과 뒤 머지는 작성자가(사용자 요청 시). 머지 후 골 `done`은 base에서, main 직접 커밋이 금지면 `chore/G-###-done` PR로(골 파일 + goals/INDEX.md).
 5. 크기는 직접 재지 않는다(`wc -c`는 바이트, 임계값은 문자 수). lint·precheck·`archive --dry`가 임계값·완료 잔존을 알리면 **다음 작업 커밋에서 기록 전에** `handoff.py archive`(기록 뒤에 돌리면 방금 쓴 `[x]`까지 옮겨진다).
 

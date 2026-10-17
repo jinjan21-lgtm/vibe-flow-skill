@@ -80,7 +80,8 @@ class PersonalRepo(unittest.TestCase):
         if mr is not None:
             write(cwd, f"{hdir}/mr/G-001.md", mr.replace("{tree}", tree))
             if qa:   # QA 실행 기록 사본
-                write(cwd, f"{hdir}/mr/G-001-qa.json", '{"tree": "x", "cmd": "t", "exit": 0}\n')
+                write(cwd, f"{hdir}/mr/G-001-qa.json", '{"tree": "%s", "cmd": "t", "exit": 0}\n' % tree)
+                write(cwd, f"{hdir}/mr/G-001-review.md", "## r1.txt\nVERDICT: CONFIRM\n")   # 리뷰 원문 사본
         sh("git", "add", "-A", cwd=cwd)
         sh("git", "commit", "-q", "--amend", "--no-edit", cwd=cwd)
         return tree
@@ -232,7 +233,8 @@ class TeamRecordMrFileTest(unittest.TestCase):
         self.assertIn("docs/handoff/mr/G-001.md", r.stdout)
         tree = self.git("rev-parse", "HEAD^{tree}")
         write(self.a, "docs/handoff/mr/G-001.md", MR_FILE.replace("{tree}", tree))
-        write(self.a, "docs/handoff/mr/G-001-qa.json", '{"tree": "x", "cmd": "t", "exit": 0}\n')
+        write(self.a, "docs/handoff/mr/G-001-qa.json", '{"tree": "%s", "cmd": "t", "exit": 0}\n' % tree)
+        write(self.a, "docs/handoff/mr/G-001-review.md", "VERDICT: CONFIRM\n")
         sh("git", "add", "-A", cwd=self.a)
         sh("git", "commit", "-q", "--amend", "--no-edit", cwd=self.a)
         r = ho(self, "check-record", cwd=self.a)

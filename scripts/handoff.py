@@ -6,9 +6,11 @@
   python handoff.py claim G-### "<할 일>" <브랜치> [--no-push]
                                                    선점: fetch → 중복 검사 → 브랜치 → REMAINING 착수 줄 커밋 → push
   python handoff.py check-record [--commit <sha>]  완료 기록 검사: 그 커밋(기본 HEAD)에 작업 + WORKLOG·INDEX·REMAINING
-                                                   + MR 본문(<핸드오프>/mr/G-###.md)·QA 실행 기록(G-###-qa.json, exit 0)이
-                                                   함께 있어야 한다. 골 작업은 QA 뒤
-                                                   기록을 마지막 작업 커밋에 amend로 합친다
+                                                   + MR 본문(<핸드오프>/mr/G-###.md)·QA 실행 기록(G-###-qa.json: tree·cmd·
+                                                   exit 0, tree = MR 「QA 결과」 대상)·리뷰 원문(G-###-review.md, VERDICT 줄)이
+                                                   함께 있어야 한다. 골 작업은 QA 뒤 기록을 마지막 작업 커밋에 amend로 합친다
+  python handoff.py export-evidence G-###          .vibe/mr-G-###.md·.vibe/qa/<QA 대상 tree>.json·이 골의 .vibe/review/
+                                                   d*·r*.txt → <핸드오프>/mr/G-###.md·-qa.json·-review.md (기록 전에)
   원격이 없거나 .vibe-flow.json "remote": false면 로컬 모드 — claim은 로컬 커밋만 한다
 
 인덱스 구조(docs/structure.md 「인덱스 계층」 — 대형 프로젝트):
@@ -31,6 +33,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import vf_git  # noqa: E402
 import hindex  # noqa: E402
+import qa_run  # noqa: E402
 
 ID_RE = re.compile(r"\bG-\d{3,}\b")
 TODAY = datetime.date.today().isoformat()
@@ -254,12 +257,31 @@ def mr_file_missing(hdir, gids, files, hi):
             body = re.sub(r"<!--.*?-->|\(진행 전\)|<[^>\n]+>", "", m.group(1), flags=re.S) if m else ""
             if not re.search(r"\w", body):
                 miss.append(f"{p}의 「{name}」이 없거나 비어 있음")
-        miss += qa_record_missing(hdir, g, files, hi)
+        miss += qa_record_missing(hdir, g, files, hi, t)
+        miss += review_record_missing(hdir, g, files, hi)
     return miss
 
 
-def qa_record_missing(hdir, g, files, hi):
-    """QA 실행 기록: 기록 커밋에 <핸드오프>/mr/G-###-qa.json(qa_run.py가 만든 .vibe/qa/<tree>.json 사본)이 exit 0으로."""
+def qa_target(mr_text):
+    """MR 「QA 결과」의 대상 commit/tree sha(없으면 '')."""
+    m = re.search(r"^##\s+QA 결과\s*$(.*?)(?=^##\s|\Z)", mr_text, re.M | re.S)
+    t = re.search(qa_run.TARGET, m.group(1)) if m else None
+    return t.group(1) if t else ""
+
+
+def review_record_missing(hdir, g, files, hi):
+    """리뷰 원문: .vibe/review/는 추적 안 된다 — 기록 커밋에 <핸드오프>/mr/G-###-review.md(VERDICT 줄 포함)."""
+    q = f"{hdir}/mr/{g}-review.md"
+    if q not in files:
+        return [f"리뷰 원문 {q}가 이 커밋에 없음 — python handoff.py export-evidence {g}"]
+    if not re.search(r"^VERDICT:", vf_git.git("show", f"{hi}:{q}"), re.M):
+        return [f"{q}에 VERDICT: 줄 없음 — 설계 확인·리뷰 원문이 아님(export-evidence {g})"]
+    return []
+
+
+def qa_record_missing(hdir, g, files, hi, mr_text=""):
+    """QA 실행 기록: 기록 커밋에 <핸드오프>/mr/G-###-qa.json(qa_run.py가 만든 .vibe/qa/<tree>.json 사본)이 exit 0으로,
+    tree가 커밋된 MR 「QA 결과」의 대상 tree(대상 commit이면 그 tree)와 같아야 한다."""
     q = f"{hdir}/mr/{g}-qa.json"
     if q not in files:
         return [f"QA 실행 기록 {q}가 이 커밋에 없음 — qa_run.py가 남긴 .vibe/qa/<tree>.json을 복사해 같은 커밋에 넣는다"]
@@ -267,11 +289,55 @@ def qa_record_missing(hdir, g, files, hi):
         rec = json.loads(vf_git.git("show", f"{hi}:{q}"))
     except ValueError:
         return [f"{q}가 JSON이 아님 — .vibe/qa/<tree>.json을 그대로 복사한다"]
-    if not isinstance(rec, dict) or "exit" not in rec:
-        return [f"{q}에 exit 없음 — qa_run.py 기록이 아님"]
+    if not isinstance(rec, dict) or any(k not in rec for k in ("tree", "cmd", "exit")):
+        return [f"{q}에 tree·cmd·exit 없음 — qa_run.py 기록이 아님(export-evidence {g})"]
     if rec["exit"] != 0:
         return [f"{q}는 exit {rec['exit']} — 통과한 QA 실행 기록이 아님"]
+    tgt = qa_target(mr_text)
+    if not tgt:
+        return [f"{hdir}/mr/{g}.md 「QA 결과」에 대상 commit/tree 없음 — {q}와 대조할 수 없음"]
+    rt = str(rec["tree"])
+    if not any(c and len(c) >= 7 and rt.startswith(c) for c in (tgt, vf_git.tree_of(tgt))):
+        return [f"{q}의 tree({rt[:12]})가 MR 「QA 결과」 대상({tgt[:12]})과 다름 — 다른 작업물의 실행 기록"]
     return []
+
+
+def export_evidence(cfg, g):
+    """기록 커밋에 넣을 검증 증거를 .vibe/에서 <핸드오프>/mr/로 옮긴다: MR 본문, QA 실행 기록, 이 골의 리뷰 원문."""
+    if not re.fullmatch(r"G-\d{3,}", g):
+        die(f"[export-evidence] 골 ID가 아님: {g}")
+    _, hdir, _ = detect(cfg)
+    mr_src = os.path.join(".vibe", f"mr-{g}.md")
+    if not os.path.exists(mr_src):
+        die(f"[export-evidence] MR 본문 {mr_src} 없음")
+    mr = read(mr_src)
+    tgt = qa_target(mr)
+    tree = vf_git.tree_of(tgt) if tgt else ""
+    tree = tree or tgt
+    qa_src = qa_run.record_path(tree) if tree else ""
+    if not qa_src or not os.path.exists(qa_src):
+        cands = [f for f in os.listdir(qa_run.QA_DIR) if f.startswith(tree) and f.endswith(".json")] \
+            if tree and os.path.isdir(qa_run.QA_DIR) else []
+        if len(cands) != 1:
+            die(f"[export-evidence] QA 실행 기록 {qa_src or '.vibe/qa/<tree>.json'} 없음 — 「QA 결과」 대상 확인, python qa_run.py --mr {mr_src}")
+        qa_src = os.path.join(qa_run.QA_DIR, cands[0])
+    d = os.path.join(".vibe", "review")
+    parts = []
+    names = sorted(os.listdir(d)) if os.path.isdir(d) else []
+    for kind, stamp in (("d", ".meta"), ("r", ".tree")):
+        for n in sorted((x for x in names if re.fullmatch(rf"{kind}\d+\.txt", x)), key=lambda x: int(x[1:-4])):
+            sp = os.path.join(d, n[:-4] + stamp)
+            goal = re.search(r"^goal:\s*(G-\d+)\s*$", read(sp), re.M) if os.path.exists(sp) else None
+            if goal and goal.group(1) == g:
+                head = f"## {n} ({'설계 확인' if kind == 'd' else '코드 리뷰'})"
+                parts.append(f"{head}\n\n````text\n{read(os.path.join(d, n)).rstrip()}\n````\n")
+    if not parts:
+        die(f"[export-evidence] .vibe/review/에 {g}의 d*·r*.txt 기록 없음 — review.py로 받은 원문이 있어야 한다")
+    os.makedirs(f"{hdir}/mr", exist_ok=True)
+    write(f"{hdir}/mr/{g}.md", mr)
+    write(f"{hdir}/mr/{g}-qa.json", read(qa_src))
+    write(f"{hdir}/mr/{g}-review.md", f"# {g} 리뷰 원문 (.vibe/review/ 사본, export-evidence)\n\n" + "\n".join(parts))
+    print(f"[export-evidence] {hdir}/mr/{g}.md · {g}-qa.json (← {qa_src}) · {g}-review.md ({len(parts)}개 원문) — 기록 커밋에 넣는다")
 
 
 def check_record(cfg, commit=None):
@@ -356,6 +422,8 @@ if __name__ == "__main__":
         claim(cfg, a[1], a[2], a[3], push="--no-push" not in a)
     elif a[:1] == ["check-record"]:
         check_record(cfg, a[2] if len(a) > 2 and a[1] == "--commit" else None)
+    elif a[:1] == ["export-evidence"] and len(a) == 2:
+        export_evidence(cfg, a[1])
     elif a[:1] == ["migrate"]:
         snap, made = hindex.migrate(cfg)
         print(f"[migrate] 완료 — 스냅숏 {snap}\n  " + "\n  ".join(made))

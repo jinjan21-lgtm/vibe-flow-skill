@@ -85,7 +85,7 @@ def seed_qa_run(body):
             f.write("\n.vibe/\n")
         os.makedirs(os.path.join(".vibe", "qa"), exist_ok=True)
         with open(os.path.join(".vibe", "qa", tree + ".json"), "w", encoding="utf-8") as f:
-            json.dump({"tree": tree, "cmd": "test", "exit": 0}, f)
+            json.dump({"tree": tree, "cmd": (vf_git.config().get("test_cmd") or "").strip(), "exit": 0}, f)
     for p in re.findall(r"!\[[^\]]*\]\(([^)\s]+)\)", body):
         if not re.match(r"(?i)https?://", p) and not os.path.exists(p):
             with open(os.path.join(".git", "info", "exclude"), "a", encoding="utf-8") as f:
@@ -217,6 +217,8 @@ class MrCheckTest(Repo):
         sh("git", "checkout", "-q", "-b", "G-001/test", cwd=self.d)  # 골 브랜치에서 작업
         import vf_git
         self.vf = vf_git
+        # MR_OK의 「확정 (사람 판정 D-001)」은 실재하는 결정이어야 한다
+        self.write("docs/DECISIONS.md", "# 결정\n\n## D-001 설계 판정\n- G-001 설계는 사람이 확정\n")
         self.base = vf_git.snapshot()  # 스냅샷 모드 기준
         self.write(".vibe-flow.json", '{"base": "%s"}' % self.base)
 
@@ -681,8 +683,9 @@ class TeamHandoffTest(unittest.TestCase):
             t = re.sub(r"- \[~\] (G-001 [^(]*)\(착수 @\S+ [\d-]+\)[^\n]*", rf"- [x] \1(@{user} 2026-10-17)", t)
             open(p, "w", encoding="utf-8", newline="\n").write(t)
             os.makedirs(os.path.join(cwd, "docs/handoff/mr"), exist_ok=True)
-            w("docs/handoff/mr/G-001.md", MR_OK, "w")   # 기록 커밋에 MR 본문(검증 증거)
-            w("docs/handoff/mr/G-001-qa.json", '{"tree": "x", "cmd": "t", "exit": 0}\n', "w")   # QA 실행 기록 사본
+            w("docs/handoff/mr/G-001.md", MR_OK.replace("{qa}", "- 대상 tree: " + "a" * 40), "w")   # 기록 커밋에 MR 본문(검증 증거)
+            w("docs/handoff/mr/G-001-qa.json", '{"tree": "%s", "cmd": "t", "exit": 0}\n' % ("a" * 40), "w")   # QA 실행 기록 사본
+            w("docs/handoff/mr/G-001-review.md", "VERDICT: CONFIRM\n", "w")   # 리뷰 원문 사본
         sh("git", "add", "-A", cwd=cwd)
         sh("git", "commit", "-qm", "G-001 거래처 검색", cwd=cwd)
 
@@ -1166,6 +1169,7 @@ class FlexibilityTest(Repo):
         sh("git", "checkout", "-q", "-b", "G-001/test", cwd=self.d)
         import vf_git
         self.vf = vf_git
+        self.write("docs/DECISIONS.md", "# 결정\n\n## D-001 설계 판정\n- G-001 설계는 사람이 확정\n")   # MR_OK의 사람 판정 D-001
         self.write(".vibe-flow.json", '{"base": "%s"}' % vf_git.snapshot())
         self.write(".gitignore", "mr.md\n")
 

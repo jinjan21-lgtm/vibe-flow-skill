@@ -469,6 +469,7 @@ class DesignRecordTest(C2):
         self.assertEqual(self.stage("build").returncode, 1)
 
     def test_human_verdict_and_skip_need_no_record(self):
+        self.write("docs/DECISIONS.md", "## D-003 캐시 생략\n- 영향: G-001\n")   # 사람 판정은 결정 기록과 대조(J-09)
         self.mr(confirm="- 확인 1: blocker 1\n- 확인 2: blocker 1\n- 사람 결정: D-003 — 캐시 생략\n"
                         "- 판정: 확정 (사람 판정 D-003)")
         self.assertEqual(self.stage("build").returncode, 0, self.stage("build").stdout)
@@ -603,6 +604,7 @@ class RecordNameTest(C2):
         import mr_check
         import vf_git
         cfg = vf_git.config()
+        self.write("docs/PLAN.md", "# PLAN INDEX\n- [검색 흐름](PLAN-검색-흐름.md#검색-흐름)\n")   # 분할 파일은 PLAN.md 링크로만(J-02)
         for f in ("PLAN.md", "PLAN-body.md", "PLAN-검색-흐름.md", "WORKLOG.md", "REMAINING.md",
                   "REMAINING-done-2026-10.md", "LESSONS.md", "LESSONS-body.md", "LESSONS-body-2.md", "DECISIONS.md",
                   "DECISIONS-2026-10.md", "DECISIONS-2026-10-2.md", "DECISIONS-INDEX-replaced.md", "NORTHSTAR.md",
@@ -660,6 +662,117 @@ class StaleContextTest(C2):
         r = self.stage("qa")
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("기준", r.stdout)
+
+
+
+class AuditJTest(C2):
+    """외부 감사 J-01·02·06·07·08·09 + 평가자(--next DONE, 위험 표식 생략 금지)."""
+
+    def setUp(self):
+        super().setUp()
+        sys.path.insert(0, SCRIPTS)
+        import mr_check
+        import vf_git
+        self.mc, self.vf = mr_check, vf_git
+
+    def test_j08_missing_qa_run_fails_closed(self):
+        saved = sys.modules.get("qa_run")
+        sys.modules["qa_run"] = None    # import qa_run → ImportError
+        try:
+            miss = self.mc.merge_checks("- 코드: 통과\n", self.vf.config())
+        finally:
+            if saved is None:
+                sys.modules.pop("qa_run", None)
+            else:
+                sys.modules["qa_run"] = saved
+        self.assertTrue(any("QA 검증기(qa_run) 없음" in x for x in miss), miss)
+
+    def test_j09_human_verdict_needs_decision_for_goal(self):
+        self.mr(confirm="- 확인 2: blocker 1\n- 판정: 확정 (사람 판정 D-009)")
+        r = self.stage("build")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("D-009", r.stdout)
+        self.write("docs/DECISIONS-2026-10.md", "# 결정\n\n## D-009 캐시 생략\n- 영향: G-002\n\n## D-010 x\n- G-001\n")
+        r = self.stage("build")
+        self.assertEqual(r.returncode, 1, r.stdout)                 # 다른 골의 결정
+        self.write("docs/DECISIONS-2026-10.md", "# 결정\n\n## D-009 캐시 생략\n- 영향: G-001 검색\n")
+        self.assertEqual(self.stage("build").returncode, 0, self.stage("build").stdout)
+
+    def test_j07_unreadable_review_tree_is_a_miss(self):
+        self.write("app.py", IMPL)
+        seed_review()
+        self.mr(review="- 라운드 1: x\n- 판정: 확정")
+        self.assertEqual(self.stage("qa").returncode, 0, self.stage("qa").stdout)
+        p = os.path.join(".vibe", "review", "r1.tree")
+        with open(p, encoding="utf-8") as f:
+            rest = f.read().split("\n", 1)[1]
+        for bad in ("deadbeef" * 5, "not-a-sha"):
+            with open(p, "w", encoding="utf-8", newline="\n") as f:
+                f.write(bad + "\n" + rest)
+            r = self.stage("qa")
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("리뷰 기록 tree를 읽을 수 없음", r.stdout)
+
+    def test_j06_conditions_changed_after_review(self):
+        self.write("app.py", IMPL)
+        self.mr(conds="- [ ] 부분 일치 검색")
+        r = self.codex("review.py", "--round", "1", "--mr", "mr.md", reply=R1_OK)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        with open(".vibe/review/r1.tree", encoding="utf-8") as f:
+            self.assertIn("conds:", f.read())
+        self.mr(conds="- [x] 부분 일치 검색", review="- 라운드 1: x\n- 판정: 확정")   # 체크만 바뀜 — 같은 조건
+        self.assertEqual(self.stage("qa").returncode, 0, self.stage("qa").stdout)
+        self.mr(conds="- [x] 아무 결과나 돌려줌", review="- 라운드 1: x\n- 판정: 확정")
+        r = self.stage("qa")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("리뷰 뒤 완료 조건이 바뀜", r.stdout)
+
+    def test_j01_empty_checked_item_is_a_miss(self):
+        self.mr(conds="- [x] 부분 일치 검색\n- [x]   ")
+        r = self.stage("draft")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("빈 항목", r.stdout)
+
+    def test_j02_plan_split_only_if_hindex_name_or_linked(self):
+        cfg = self.vf.config()
+        self.assertTrue(self.mc.is_record("docs/PLAN.md", cfg))
+        self.assertTrue(self.mc.is_record("docs/PLAN-body.md", cfg))
+        self.assertFalse(self.mc.is_record("docs/PLAN-evil.md", cfg))
+        self.write("docs/PLAN.md", "# PLAN INDEX\n- [범위](PLAN-scope.md#범위)\n")
+        self.assertTrue(self.mc.is_record("docs/PLAN-scope.md", cfg))
+        self.assertFalse(self.mc.is_record("docs/PLAN-evil.md", cfg))
+
+    def test_next_reports_done_only_when_record_passes(self):
+        import contextlib
+        import io
+        self.mr()
+        old = (self.mc.next_stage, self.mc.record_check, sys.argv)
+        self.mc.next_stage = lambda text, cfg: ("record", "vibe-record", [])
+        try:
+            for ok, want in ((True, "DONE — 머지 준비 완료(머지는 사용자)"), (False, "record → 세부 스킬 vibe-record")):
+                self.mc.record_check = lambda ok=ok: (ok, [] if ok else ["WORKLOG 기록 없음"])
+                sys.argv = ["mr_check.py", "mr.md", "--next"]
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    self.mc.main()
+                self.assertIn(want, buf.getvalue())
+                if not ok:
+                    self.assertIn("WORKLOG 기록 없음", buf.getvalue())
+                    self.assertNotIn("DONE", buf.getvalue())
+        finally:
+            self.mc.next_stage, self.mc.record_check, sys.argv = old
+
+    def test_risky_change_cannot_skip_design(self):
+        self.mr(confirm=SKIP)
+        self.assertEqual(self.stage("build").returncode, 0, self.stage("build").stdout)
+        with open("mr.md", encoding="utf-8") as f:
+            body = f.read()
+        self.write("mr.md", body.replace("- 위험: 없음", "- 위험: 권한 검사 변경"))
+        r = self.stage("build")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("위험 표식이 있으면 설계 확인 생략 불가", r.stdout)
+        self.write("mr.md", body.replace("- 데이터·API 변경: 없음", "- 데이터·API 변경: 응답에 필드 추가"))
+        self.assertIn("위험 표식이 있으면 설계 확인 생략 불가", self.stage("build").stdout)
 
 
 if __name__ == "__main__":

@@ -95,7 +95,7 @@ def design_items_missing(body):
 
 # 핸드오프 폴더 바로 아래 기록 파일 — 정확한 이름과 hindex.py의 분할·보관 이름만(docs/structure.md 「문서별 규칙」).
 # 접두사로 보면 PLANET.md·INDEXER.md 같은 코드 문서까지 빠진다
-RECORD_NAME = re.compile(r"(?:PLAN(?:-[\w-]+)?|WORKLOG|REMAINING(?:-done-\d{4}-\d{2})?|LESSONS(?:-body(?:-\d+)?)?"
+RECORD_NAME = re.compile(r"(?:PLAN(?:-body(?:-\d+)?)?|WORKLOG|REMAINING(?:-done-\d{4}-\d{2})?|LESSONS(?:-body(?:-\d+)?)?"
                          r"|DECISIONS(?:-\d{4}-\d{2}(?:-\d+)?|-INDEX-replaced)?|NORTHSTAR(?:-body)?|INDEX)\.md")
 QA_RECORD = re.compile(r"G-\d{3,}-qa\.json")   # <핸드오프>/mr/G-###-qa.json: qa_run.py 실행 기록 사본(기록 커밋에 넣는다)
 
@@ -113,7 +113,17 @@ def is_record(f, cfg):
         return False
     if f.startswith((goals + "/", h + "/mr/", h + "/WORKLOG/")) or f in (p["northstar"], p["northstar"][:-3] + "-body.md"):
         return True
+    if d == h and re.fullmatch(r"PLAN-[\w-]+\.md", name) and not RECORD_NAME.fullmatch(name):
+        return plan_linked(h, name)   # PLAN 섹션 분할 파일(hindex)은 PLAN.md 목차가 링크한 것만
     return d == h and bool(RECORD_NAME.fullmatch(name))
+
+
+def plan_linked(h, name):
+    """PLAN.md(작업 트리)가 그 파일을 링크하는가 — 링크 없는 PLAN-*.md는 기록이 아니라 코드로 센다."""
+    p = os.path.join(h, "PLAN.md")
+    if not os.path.exists(p):
+        return False
+    return bool(re.search(rf"\]\(\s*(?:\./)?{re.escape(name)}(?:#[^)]*)?\)", _read(p)))
 
 
 def code_changes(cfg, old=None, cur=None):
@@ -152,6 +162,13 @@ def completion_items(text):
             c = re.match(r"\[([ xX])\]\s*(.*)$", m.group(1))
             out.append((bool(c) and c.group(1) in "xX", c.group(2) if c else m.group(1)))
     return out
+
+
+def completion_hash(text):
+    """완료 조건 문구(체크 상태 제외, 공백 정규화)의 해시 — review.py가 r<N>.tree에 남기고 qa·merge가 대조한다."""
+    import hashlib
+    norm = "\n".join(" ".join(t.split()) for _, t in completion_items(text))
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
 
 
 def completion_prose(text):
@@ -269,7 +286,8 @@ def round_not_confirmed(kind, goal, cfg):
 def code_diff(old, cur, cfg):
     """두 tree 사이 바뀐 코드 — 기록 파일(is_record)과 .vibe/(로컬 작업 상태)를 빼고,
     실수로 추적 중인 무시 대상(.pyc 등, 테스트마다 바뀜)도 뺀다. (코드 목록, 뺀 무시 대상)."""
-    code = [f for f in vf_git.changed_files(old, cur) if not is_record(f, cfg) and not f.startswith(".vibe/")]
+    names = vf_git.git("diff", "--name-only", old, cur, check=True)   # git 실패는 '변경 없음'이 아니다(RuntimeError)
+    code = [f for f in names.splitlines() if f and not is_record(f, cfg) and not f.startswith(".vibe/")]
     ignored = set(vf_git.git_input(["check-ignore", "--no-index", "--stdin"], "\n".join(code)).splitlines()) if code else set()
     return [f for f in code if f not in ignored], ignored
 
@@ -284,6 +302,30 @@ def diverged_design_checks(goal, cfg=None):
         if goal and not record_problem(p, goal, cfg) and record_fields(p).get("diverged") == "yes":
             hit.append(f"d{n}")
     return hit
+
+
+def decision_problem(did, gids, cfg):
+    """사람 판정 D-nnn이 결정 파일(<핸드오프>/DECISIONS*.md)에 '## D-nnn' 블록으로 있고 그 블록이 이 골 ID를 적었는가."""
+    import glob
+    h = vf_git.paths(cfg)["handoff"]
+    for f in sorted(glob.glob(os.path.join(h, "DECISIONS*.md"))):
+        m = re.search(rf"^##\s+{did}(?!\d).*?(?=^##\s|\Z)", _read(f), re.M | re.S)
+        if m:
+            if gids and all(re.search(rf"(?<![0-9A-Za-z]){g}(?![0-9A-Za-z])", m.group(0)) for g in gids):
+                return ""
+            return f"결정 블록({os.path.basename(f)})에 이 골 ID({', '.join(gids) or '없음'})가 없음"
+    return f"{h}/DECISIONS*.md에 '## {did}' 결정이 없음"
+
+
+def _none(v):
+    return bool(re.match(r"없음(?=$|[\s(（—–.,-])", (v or "").strip()))
+
+
+def risky(s):
+    """「영향·위험」 '- 위험:'이나 「설계」 '데이터·API 변경:'이 '없음'이 아니면 위험 표식(줄이 없어도)."""
+    r = re.search(r"^\s*[-*]?\s*위험\s*:(.*)$", s.get("영향·위험", ""), re.M)
+    a = re.search(r"^\s*[-*]?\s*데이터·API[^:\n]*:(.*)$", s.get("설계", ""), re.M)
+    return not (r and _none(r.group(1)) and a and _none(a.group(1)))
 
 
 def goal_checks(s, cfg):
@@ -335,6 +377,9 @@ def check(text, stage, cfg):
             if not completion_items(text) or prose:
                 miss.append("완료 조건은 체크리스트 항목으로 — 「완료 조건」의 줄마다 '- [ ] <관찰 가능한 결과>'"
                             + (f"(목록 밖 문장: '{prose[0][:40]}')" if prose else "(항목 0개)"))
+            empty = sum(1 for _, t in completion_items(text) if not t.strip())
+            if empty:
+                miss.append(f"「완료 조건」에 빈 항목 {empty}개 — 항목마다 관찰 가능한 결과를 적는다")
         miss += design_items_missing(s.get("설계", ""))
     if i >= 2:
         dc = s.get("설계 확인", "")
@@ -342,7 +387,11 @@ def check(text, stage, cfg):
         skipped = re.search(r"생략:\s*작은 변경", dc)
         if not (confirmed or skipped):
             miss.append("「설계 확인」에 '판정: 확정'(또는 '생략: 작은 변경') 없음 — review.py --design 먼저")
-        human = re.search(r"판정:\s*확정\s*[(（]\s*사람 판정\s*D-\d+", dc)
+        human = re.search(r"판정:\s*확정\s*[(（]\s*사람 판정\s*(D-\d+)", dc)
+        if confirmed and human:
+            why = decision_problem(human.group(1), gids, cfg)
+            if why:
+                miss.append(f"「설계 확인」 사람 판정 {human.group(1)}: {why} — 결정을 D-nnn으로 기록하고 이 골 ID를 적는다")
         if confirmed and not human:
             # MR 문구가 아니라 Codex 출력이 판정이다 — 최근 d<N>.txt가 CONFIRM이고 blocker가 없어야 한다
             why = round_not_confirmed("d", goal, cfg)
@@ -351,6 +400,8 @@ def check(text, stage, cfg):
                             "review.py --design 1(또는 2)을 지금 브랜치에서 다시")
         if len(re.findall(r"^-\s*확인\s*\d", dc, re.M)) > 2:
             miss.append("설계 확인이 2회를 넘음 — 사람 판정 필요")
+        if skipped and not confirmed and risky(s):
+            miss.append("위험 표식이 있으면 설계 확인 생략 불가 — 「영향·위험」 '- 위험:'과 「설계」 '데이터·API 변경:'이 '없음'일 때만 생략")
         if skipped and not confirmed:
             # 생략은 구현 전에 정한다 — 예상치를 먼저 적고, build를 커밋마다 돌려 넘는 순간 멈춘다
             lim = cfg.get("design_skip", {})
@@ -379,7 +430,7 @@ def check(text, stage, cfg):
         if len(re.findall(r"^-\s*라운드\s*\d", rv, re.M)) > 3:
             miss.append("리뷰 라운드가 3회를 넘음 — 사람 판정 필요")
         if re.search(r"판정:\s*확정", rv):
-            miss += review_evidence(goal, cfg)
+            miss += review_evidence(goal, cfg, text)
     if stage == "merge":
         n = unchecked_conditions(text)
         if n:
@@ -388,16 +439,26 @@ def check(text, stage, cfg):
     return miss
 
 
-def review_evidence(goal, cfg):
+def review_evidence(goal, cfg, text=None):
     """「리뷰 기록」 '판정: 확정'의 근거: 최근 유효 라운드가 CONFIRM(blocker 없음)이고, 그 라운드가 본 tree 뒤로
     코드(기록 파일 제외)가 바뀌지 않았어야 한다. 확정 뒤 코드 변경은 다음 라운드(부분)로, 3라운드를 썼으면 사람에게."""
     why = round_not_confirmed("r", goal, cfg)
     if why:
         return [f"「리뷰 기록」은 '판정: 확정'인데 리뷰 기록이 뒷받침하지 않음({why}) — review.py --round 1부터(지금 브랜치에서)"]
     n = latest_round("r", goal, cfg)[0]
-    with open(os.path.join(REVIEW_DIR, f"r{n}.tree"), encoding="utf-8") as f:
+    rec = os.path.join(REVIEW_DIR, f"r{n}.tree")
+    with open(rec, encoding="utf-8") as f:
         seen = f.read().strip().splitlines()[0].strip()
-    code, _ = code_diff(seen, vf_git.snapshot(), cfg)
+    old_conds = record_fields(rec).get("conds")
+    if text is not None and old_conds and old_conds != completion_hash(text):
+        return [f"리뷰 뒤 완료 조건이 바뀜(r{n}.tree) — 리뷰 재실행(review.py --round 1)"]
+    unread = [f"리뷰 기록 tree를 읽을 수 없음(r{n}.tree: {seen[:12]}) — 리뷰 재실행(review.py --round 1)"]
+    if not re.fullmatch(r"[0-9a-f]{7,40}", seen) or vf_git.obj_type(seen) != "tree":
+        return unread
+    try:
+        code, _ = code_diff(seen, vf_git.snapshot(), cfg)
+    except RuntimeError:
+        return unread
     if not code:
         return []
     shown = ", ".join(code[:3]) + (" …" if len(code) > 3 else "")
@@ -456,11 +517,13 @@ def merge_checks(qa, cfg):
             miss.append("이 브랜치가 갈라진 뒤 base에서 노스스타가 바뀜 — 골을 다시 judge 받아야 함")
         if vf_git.git("rev-parse", cfg["base"]) != mb:
             miss.append(f"base({cfg['base']})에 이 브랜치에 없는 커밋이 있음 — 리베이스한 뒤 그 위에서 QA를 다시 하세요")
-    try:   # QA 실행 증거(qa_run.py가 남긴 기록)와 「QA 결과」 대상 대조 — 모듈이 없는 설치에서는 건너뛴다
+    try:   # QA 실행 증거(qa_run.py가 남긴 기록)와 「QA 결과」 대상 대조 — 검증기가 없으면 통과가 아니다(fail closed)
         import qa_run
     except ImportError:
         qa_run = None
-    if qa_run is not None and hasattr(qa_run, "verify"):
+    if qa_run is None or not hasattr(qa_run, "verify"):
+        miss.append("QA 검증기(qa_run) 없음 — 설치 확인")
+    else:
         miss += qa_run.verify(qa, cfg)
     return miss
 
@@ -478,11 +541,29 @@ def next_stage(text, cfg):
     return "record", "vibe-record", []
 
 
+def record_check():
+    """HEAD의 완료 기록 검사(handoff.py check-record). (통과, 빠진 항목 줄)."""
+    import subprocess
+    r = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "handoff.py"),
+                        "check-record"], capture_output=True, text=True, encoding="utf-8")
+    out = (r.stdout or "") + (r.stderr or "")
+    lines = [x.strip()[2:] for x in out.splitlines() if x.strip().startswith("- ")]
+    if r.returncode and not lines:
+        lines = [out.strip()[-200:] or "check-record 실패"]
+    return r.returncode == 0, lines
+
+
 def main():
     a = sys.argv[1:]
     if len(a) == 2 and a[1] == "--next":
         with open(a[0], encoding="utf-8") as f:
             st, skill, miss = next_stage(f.read(), vf_git.config())
+        if st == "record":   # merge 통과 — HEAD의 기록(check-record)까지 통과해야 끝
+            ok, rec = record_check()
+            if ok:
+                print("[mr-check:next] DONE — 머지 준비 완료(머지는 사용자)")
+                return
+            miss = rec
         print(f"[mr-check:next] 지금 단계: {st} → 세부 스킬 {skill}")
         for x in miss:
             print(" -", x)

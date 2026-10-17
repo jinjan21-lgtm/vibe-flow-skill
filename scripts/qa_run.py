@@ -28,6 +28,7 @@ TAIL = 200
 QA_DIR = os.path.join(".vibe", "qa")
 PASS = r"통과(?=$|[\s(（—–])"   # mr_check.PASS와 같다
 TARGET = r"대상 (?:commit|tree):\s*`?([0-9a-f]{7,40})"   # mr_check.merge_checks와 같다
+MEDIA = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".webm")   # 브라우저 증거로 받는 파일
 
 
 def record_path(tree):
@@ -121,6 +122,8 @@ def _verify(qa, cfg):
                         miss.append(f"실행 기록 {p}의 tree({str(rec.get('tree'))[:12]})가 QA 대상 tree({tree[:12]})와 다름")
                     if rec.get("exit") != 0:
                         miss.append(f"실행 기록 {p}은 exit {rec.get('exit')} — 코드 단계는 '실패'다")
+                    if rec.get("cmd") != (cfg.get("test_cmd") or "").strip():
+                        miss.append(f"테스트 명령이 바뀜 — qa_run.py 다시 (기록 {p}: {str(rec.get('cmd'))[:60]})")
                 elif rec is not None:
                     miss.append(f"실행 기록 {p} 형식이 아님")
     if re.search(rf"^\s*-\s*브라우저:\s*{PASS}", qa, re.M):
@@ -130,6 +133,8 @@ def _verify(qa, cfg):
         for p in paths:
             if not os.path.isfile(p):
                 miss.append(f"브라우저 증거 파일 없음: {p}")
+            elif not p.lower().endswith(MEDIA):
+                miss.append(f"브라우저 증거가 이미지·영상이 아님: {p} ({'·'.join(e[1:] for e in MEDIA)}만)")
     return miss
 
 

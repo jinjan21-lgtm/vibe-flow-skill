@@ -4,6 +4,7 @@
 import importlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -193,7 +194,10 @@ class CheckRecordQaJsonTest(PersonalRepo):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def add_qa(self, exit_code):
-        write(self.d, "docs/mr/G-001-qa.json", json.dumps({"tree": "x", "cmd": "t", "exit": exit_code}))
+        mr = open(os.path.join(self.d, "docs/mr/G-001.md"), encoding="utf-8").read()
+        tree = re.search(r"대상 tree: ([0-9a-f]{40})", mr).group(1)   # work_and_record가 「QA 결과」에 쓴 tree
+        write(self.d, "docs/mr/G-001-qa.json", json.dumps({"tree": tree, "cmd": "t", "exit": exit_code}))
+        write(self.d, "docs/mr/G-001-review.md", "VERDICT: CONFIRM\n")
         sh("git", "add", "-A", cwd=self.d)
         sh("git", "commit", "-q", "--amend", "--no-edit", cwd=self.d)
 
@@ -215,6 +219,102 @@ class CheckRecordQaJsonTest(PersonalRepo):
         self.add_qa(0)
         r = self.ho("check-record")
         self.assertEqual(r.returncode, 0, r.stdout)
+
+
+# ---------- J-03·J-04·J-05·증거 내보내기 ----------
+class VerifyStrictTest(QaRepo):
+    def test_cmd_changed_is_problem(self):   # J-03
+        tree = self.tree()
+        write(self.d, f".vibe/qa/{tree}.json", json.dumps({"tree": tree, "cmd": "old cmd", "exit": 0}))
+        miss = self.verify(f"- 대상 tree: {tree}\n- 코드: 통과 — x\n")
+        self.assertTrue(any("테스트 명령이 바뀜" in x for x in miss), miss)
+
+    def test_browser_non_media_file_is_problem(self):   # J-04
+        self.qa()
+        write(self.d, ".vibe/shots/A1.txt", "로그")
+        miss = self.verify(f"- 대상 tree: {self.tree()}\n- 코드: 통과 — x\n- 브라우저: 통과\n- 증거: [A1](.vibe/shots/A1.txt)\n")
+        self.assertTrue(any("A1.txt" in x for x in miss), miss)
+
+    def test_browser_video_is_ok(self):
+        self.qa()
+        tree = self.tree()
+        write(self.d, ".vibe/shots/A1.webm", "v")
+        write(self.d, ".vibe/shots/A2.JPEG", "j")
+        self.assertEqual(self.verify(f"- 대상 tree: {tree}\n- 코드: 통과 — x\n- 브라우저: 통과\n"
+                                     "- 증거: [A1](.vibe/shots/A1.webm) ![A2](.vibe/shots/A2.JPEG)\n"), [])
+
+
+class CheckRecordStrictTest(PersonalRepo):
+    def setUp(self):
+        super().setUp()
+        self.assertEqual(self.ho("claim", "G-001", "거래처 검색", "feat/G-001-search").returncode, 0)
+
+    def amend(self, path, text):
+        if text is None:
+            os.remove(os.path.join(self.d, path))
+        else:
+            write(self.d, path, text)
+        sh("git", "add", "-A", cwd=self.d)
+        sh("git", "commit", "-q", "--amend", "--no-edit", cwd=self.d)
+        return self.ho("check-record")
+
+    def test_fixture_passes(self):
+        self.work_and_record(mr=MR_FILE)
+        r = self.ho("check-record")
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_qa_json_exit_only_is_problem(self):   # J-05
+        self.work_and_record(mr=MR_FILE)
+        r = self.amend("docs/mr/G-001-qa.json", '{"exit": 0}')
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("tree", r.stdout)
+
+    def test_qa_json_other_tree_is_problem(self):
+        self.work_and_record(mr=MR_FILE)
+        r = self.amend("docs/mr/G-001-qa.json", json.dumps({"tree": "b" * 40, "cmd": "t", "exit": 0}))
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("대상", r.stdout)
+
+    def test_review_md_required(self):   # 리뷰 원문 영속
+        self.work_and_record(mr=MR_FILE)
+        r = self.amend("docs/mr/G-001-review.md", None)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("docs/mr/G-001-review.md", r.stdout)
+
+    def test_review_md_needs_verdict(self):
+        self.work_and_record(mr=MR_FILE)
+        r = self.amend("docs/mr/G-001-review.md", "# 리뷰\n판정 없음\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("VERDICT", r.stdout)
+
+
+class ExportEvidenceTest(PersonalRepo):
+    def test_export_writes_review_qa_and_mr(self):
+        tree = "c" * 40
+        write(self.d, ".vibe/mr-G-001.md", MR_FILE.replace("{tree}", tree))
+        rec = {"tree": tree, "cmd": "t", "exit": 0}
+        write(self.d, f".vibe/qa/{tree}.json", json.dumps(rec))
+        write(self.d, ".vibe/review/d1.txt", "설계 원문\nVERDICT: CONFIRM\n")
+        write(self.d, ".vibe/review/d1.meta", "goal: G-001\nbranch: b\nbase: x\n")
+        write(self.d, ".vibe/review/r1.txt", "리뷰 원문\nVERDICT: CONFIRM\n")
+        write(self.d, ".vibe/review/r1.tree", f"{tree}\ngoal: G-001\n")
+        write(self.d, ".vibe/review/r2.txt", "남의 골\nVERDICT: CHANGES\n")
+        write(self.d, ".vibe/review/r2.tree", f"{tree}\ngoal: G-002\n")
+        r = self.ho("export-evidence", "G-001")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rv = open(os.path.join(self.d, "docs/mr/G-001-review.md"), encoding="utf-8").read()
+        self.assertIn("설계 원문", rv)
+        self.assertIn("리뷰 원문", rv)
+        self.assertIn("d1.txt", rv)
+        self.assertNotIn("남의 골", rv)
+        self.assertEqual(json.load(open(os.path.join(self.d, "docs/mr/G-001-qa.json"), encoding="utf-8")), rec)
+        self.assertTrue(os.path.exists(os.path.join(self.d, "docs/mr/G-001.md")))
+
+    def test_export_without_qa_record_fails(self):
+        write(self.d, ".vibe/mr-G-001.md", MR_FILE.replace("{tree}", "d" * 40))
+        r = self.ho("export-evidence", "G-001")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("qa_run.py", r.stdout + r.stderr)
 
 
 if __name__ == "__main__":
