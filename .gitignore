@@ -1,0 +1,12 @@
+__pycache__/
+.vibe/
+.autopilot/
+# 개인 작업 기록·비공개 파일럿 레포 내용이 든 검증 로그 (공개 레포에 넣지 않음)
+docs/PLAN.md
+docs/WORKLOG.md
+docs/REMAINING.md
+docs/LESSONS.md
+tests/e2e-team-record.md
+tests/e2e-index-record.md
+tests/e2e_index.py
+tests/tdd-record.md
