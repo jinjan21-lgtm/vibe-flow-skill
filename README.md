@@ -31,7 +31,7 @@
 
 ## 핸드오프 기록과 인덱스 구조
 
-기록 형식은 핸드오프 스킬(팀: `docs/handoff/`, 개인: `docs/`)과 같습니다 — [docs/structure.md](docs/structure.md). 기록이 커진 대형 프로젝트는 **인덱스 구조**로 옮깁니다.
+기록 형식은 핸드오프 스킬(팀: `docs/handoff/` — [team-handoff-skill](https://github.com/jinjan21-lgtm/team-handoff-skill), 개인: `docs/`)과 같습니다 — [docs/structure.md](docs/structure.md). 기록이 커진 대형 프로젝트는 **인덱스 구조**로 옮깁니다.
 
 ```
 docs/handoff/INDEX.md   진입 인덱스 → 문서별 INDEX(PLAN·DECISIONS·LESSONS·NORTHSTAR·goals·WORKLOG) → 본문
@@ -77,7 +77,8 @@ Windows는 `New-Item -ItemType Junction`(setup.md). 팀 레포는 `.claude/skill
 
 1. **Python 3.10+**, **git**
 2. **Codex CLI** — 골 판정·설계 확인·리뷰에 씁니다(`codex exec`).
-3. **브라우저 QA** — 화면 변경 확인용. [qa-run](https://github.com/jinjan21-lgtm/qa-run-skill)의 Aside 캡처 도구를 씁니다.
+3. **핸드오프 스킬** — 팀 레포는 [team-handoff](https://github.com/jinjan21-lgtm/team-handoff-skill)를 `.claude/skills/team-handoff/`에 함께 둡니다.
+4. **브라우저 QA** — 화면 변경 확인용. [qa-run](https://github.com/jinjan21-lgtm/qa-run-skill)의 Aside 캡처 도구를 씁니다.
 
 ## 검증
 
