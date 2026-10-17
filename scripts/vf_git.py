@@ -21,6 +21,13 @@ def git(*args, env=None, check=False):
     return r.stdout.strip()
 
 
+def git_input(args, stdin):
+    """표준 입력을 넘기는 git 호출(check-ignore --stdin 등)."""
+    r = subprocess.run(["git", "-c", "core.quotepath=off", *args], input=stdin, capture_output=True, text=True,
+                       encoding="utf-8")
+    return r.stdout.strip()
+
+
 def config():
     cfg = dict(DEFAULT_CFG)
     if os.path.exists(".vibe-flow.json"):

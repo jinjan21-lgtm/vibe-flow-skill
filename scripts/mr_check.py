@@ -178,6 +178,11 @@ def merge_checks(qa, cfg):
         p = vf_git.paths(cfg)
         keep = (p["handoff"] + "/", p["goals"] + "/")
         code = [f for f in vf_git.changed_files(vf_git.tree_of(m.group(1)), cur) if not f.startswith(keep)]
+        # 스냅숏은 무시 규칙(.gitignore)에 걸린 파일을 늘 뺀다. 실수로 추적 중인 캐시(.pyc 등)는 비교에서 빼고 경고만
+        ignored = set(vf_git.git_input(["check-ignore", "--no-index", "--stdin"], "\n".join(code)).splitlines()) if code else set()
+        if ignored:
+            print(f"[mr-check] 경고: 무시 대상인데 추적 중인 파일 {len(ignored)}개는 QA 대상 비교에서 뺐다({', '.join(sorted(ignored)[:3])}) — `git rm --cached`로 정리하는 골 후보를 쓰세요")
+        code = [f for f in code if f not in ignored]
         if code:
             miss.append(f"QA 대상 {m.group(1)[:10]} 이후 바뀐 파일({', '.join(code[:3])}) — 재검증 필요(미커밋 포함)")
     if not re.search(r"^-\s*코드:\s*통과", qa, re.M):

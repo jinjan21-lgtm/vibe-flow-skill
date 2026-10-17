@@ -216,6 +216,25 @@ class MrCheckTest(Repo):
         r = self.check(self.qa_body(target), "merge")
         self.assertEqual(r.returncode, 0, r.stdout)
 
+    def test_tracked_but_ignored_artifact_does_not_block_merge(self):
+        # .pyc가 실수로 추적되고 있으면 테스트를 돌릴 때마다 바뀐다 — QA 대상 불일치로 막지 않고 경고만
+        # 스냅숏(새 인덱스)은 무시 규칙에 걸린 파일을 늘 빼므로, 추적 중인 .pyc가 있으면 커밋 tree와 영원히 안 맞았다
+        self.write(".gitignore", "mr.md\n*.pyc\n")
+        self.write("cache/app.cpython-312.pyc", "v1")
+        self.write("app.py", "x = 1\n")
+        sh("git", "add", "-A", cwd=self.d)
+        sh("git", "add", "-f", "cache/app.cpython-312.pyc", cwd=self.d)
+        sh("git", "commit", "-qm", "G-001 구현", cwd=self.d)
+        target = sh("git", "rev-parse", "HEAD", cwd=self.d).stdout.strip()   # QA 대상 = 커밋
+        self.write("cache/app.cpython-312.pyc", "v2")                    # 테스트 실행이 다시 만든 캐시
+        r = self.check(self.qa_body(target, browser="해당 없음 — 화면 없음").replace("대상 tree", "대상 commit"), "merge")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("무시 대상", r.stdout)
+        self.write("app.py", "x = 2\n")                                  # 진짜 코드 변경은 여전히 막는다
+        r = self.check(self.qa_body(target, browser="해당 없음 — 화면 없음").replace("대상 tree", "대상 commit"), "merge")
+        self.assertIn("재검증", r.stdout)
+        self.assertIn("app.py", r.stdout)
+
     def test_merge_fails_after_uncommitted_change(self):
         self.write(".gitignore", "mr.md\n")
         self.write("app.py", "x = 1\n")
