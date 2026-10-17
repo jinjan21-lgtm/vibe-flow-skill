@@ -82,8 +82,10 @@ Windows는 `New-Item -ItemType Junction`(setup.md). 팀 레포는 `.claude/skill
 
 ## 검증
 
-- `python -m unittest tests/test_scripts.py` — 71개(골 판정·단계 검사·리뷰 라운드·선점·기록·인덱스 이전 무손실·번호 원격 예약·2인 같은 날 기록 병합 등)
+- `python -m unittest tests/test_scripts.py` — 73개(골 판정·단계 검사·리뷰 라운드·선점·기록·인덱스 이전 무손실·번호 원격 예약·2인 같은 날 기록 병합 등)
 - 스킬 문서는 [superpowers:writing-skills](https://github.com/obra/superpowers) 방식(RED 기준선 → GREEN → REFACTOR)으로 서브에이전트 시험을 거쳤습니다: 단계 스킬 단독 호출, 오케스트레이터 무인 진행, 개발 유형 8개, 바뀐 규칙별 재시험. 실제 팀 레포(비공개) 이전에서 결정 100여 건 무손실, 세션 시작 읽기량 약 54,000자 → 9,500자.
+
+- **개발 퀄리티 실험** — 같은 요청을 vibe-flow 있음/없음 에이전트가 실제로 구현해 숨은 테스트로 채점: [tests/quality-record.md](tests/quality-record.md). 명확한 작은 일은 품질 차이 없이 약 6배 느리고, 요청서와 운영값이 충돌하는 일에서는 대조군이 혼자 결정해 요청을 어긴 반면 vibe-flow는 설계 확인에서 멈춰 사람 결정을 받은 뒤 전부 맞는 코드를 냈다.
 
 ## License
 

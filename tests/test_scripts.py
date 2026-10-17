@@ -980,6 +980,13 @@ class IndexStructureTest(unittest.TestCase):
         self.assertIn("refs/vibe-ids/D-005", refs)
         self.assertIn(f"{CUR_DEC} 끝에", a.stderr)
 
+    def test_next_id_points_to_decisions_md_before_index_mode(self):
+        # 인덱스 모드가 아닌 레포에서는 결정을 DECISIONS.md 끝에 — 달 본문 파일을 새로 만들게 하면 안 된다
+        r = self.ho(self.a, "next-id", "D", "--scan-only")
+        self.assertEqual(r.stdout.strip(), "D-004")
+        self.assertIn("docs/handoff/DECISIONS.md 끝에", r.stderr)
+        self.assertNotIn("DECISIONS-20", r.stderr)
+
     def test_next_id_refuses_when_remote_unreachable(self):
         self.migrate_and_publish()
         sh("git", "remote", "set-url", "origin", os.path.join(self.root, "없는-원격.git"), cwd=self.a)

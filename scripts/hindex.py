@@ -961,8 +961,11 @@ def next_id(kind, cfg, scan_only=False):
     hint = ""
     if kind == "D":
         target, new = decision_target(cfg)
-        hint = (f"{target} 끝에 `## {ident} 제목` 블록" + (" (새 파일 — DECISIONS.md 머리말 「본문:」에도 추가)" if new else "")
-                + ", DECISIONS.md 끝에 INDEX 한 줄")
+        if index_kind(layout(cfg)["decisions"]):
+            hint = (f"{target} 끝에 `## {ident} 제목` 블록" + (" (새 파일 — DECISIONS.md 머리말 「본문:」에도 추가)" if new else "")
+                    + ", DECISIONS.md 끝에 INDEX 한 줄")
+        else:
+            hint = f"{target} 끝에 `## {ident} 제목` 블록" + (" (새 파일)" if new else "")
     elif kind == "L":
         hint = "LESSONS-body.md 끝에 `- … (" + ident + ", @작성자, 날짜)`, LESSONS.md 끝에 INDEX 한 줄"
     return ident, hint + (" · 원격 예약 refs/vibe-ids/" + ident if remote else " · 원격 예약 없음(스캔·장부만)")
@@ -977,6 +980,8 @@ def decision_target(cfg):
     """새 결정을 붙일 본문 파일: 이번 달 마지막 부, 넘쳤으면 다음 부, 이번 달 파일이 없으면 새 달 파일. (경로, 새 파일인가)"""
     L = layout(cfg)
     ic = icfg(cfg)
+    if not index_kind(L["decisions"]):  # 인덱스 모드가 아니면 결정은 DECISIONS.md 한 파일에
+        return L["decisions"], not os.path.exists(L["decisions"])
     mon = TODAY.strftime("%Y-%m")
     mine = [p for p in decision_bodies(L) if body_key(p)[0] == mon]
     if not mine:

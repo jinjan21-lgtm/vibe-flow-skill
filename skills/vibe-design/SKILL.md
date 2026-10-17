@@ -19,7 +19,7 @@ description: Use when a goal is claimed and the approach is not yet confirmed �
    - UI가 닿으면 `docs/design-system.md`.
 2. 선점 브랜치에서 코드를 읽는다. 탐색 결과물(임시 코드)은 버린다.
 3. MR 본문 「설계」 다섯 칸: 접근 방식 · 바꿀 모듈·파일 · 데이터·API 변경 · 대안과 선택 이유 · 테스트 계획. 개발 유형과 영향 표식(UI·API·데이터·의존성)은 vibe-flow `docs/task-types.md`로 정한다. `--stage draft`.
-4. 설계 확인: `python $S/review.py --design 1 --mr <mr>` → 「설계 확인」에 `- 확인 1: …`, `- 판정: 확정`. blocker가 남으면 `--design 2`. 2회 뒤에도 blocker면 `판정: 보류`, 사용자에게.
+4. 설계 확인: `python $S/review.py --design 1 --mr <mr>` → 「설계 확인」에 `- 확인 1: …`, `- 판정: 확정`. blocker가 남으면 `--design 2`. 2회 뒤에도 blocker면 `판정: 보류`, 사용자에게(결정 대기는 REMAINING `- [ ] 결정: …`). 사용자가 결정하면 D-nnn으로 기록하고 `- 판정: 확정 (사람 판정 D-nnn)` — 3회차는 없고, 바뀐 설계는 「계획 vs 실제」로 리뷰에 넘긴다(`review-loop.md`).
 5. 작은 변경(기본 50줄·3파일 이하)은 `- 생략: 작은 변경`. 커지면 리뷰 단계에서 다시 막힌다.
 6. `python $S/mr_check.py <mr> --stage build` 통과 → 다음은 **vibe-dev**.
 
