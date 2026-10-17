@@ -60,7 +60,7 @@ class PersonalRepo(unittest.TestCase):
     def git(self, *args, cwd=None):
         return sh("git", *args, cwd=cwd or self.d).stdout.strip()
 
-    def work_and_record(self, mr=None, hdir="docs", cwd=None, user="alice"):
+    def work_and_record(self, mr=None, hdir="docs", cwd=None, user="alice", qa=True):
         """작업 커밋 → (QA) → 기록을 같은 커밋에 amend. mr=None이면 MR 파일을 넣지 않는다."""
         cwd = cwd or self.d
         write(cwd, "app.py", "def search(q):\n    return q\n", "a")
@@ -79,6 +79,8 @@ class PersonalRepo(unittest.TestCase):
         write(cwd, f"{hdir}/REMAINING.md", t)
         if mr is not None:
             write(cwd, f"{hdir}/mr/G-001.md", mr.replace("{tree}", tree))
+            if qa:   # QA 실행 기록 사본
+                write(cwd, f"{hdir}/mr/G-001-qa.json", '{"tree": "x", "cmd": "t", "exit": 0}\n')
         sh("git", "add", "-A", cwd=cwd)
         sh("git", "commit", "-q", "--amend", "--no-edit", cwd=cwd)
         return tree
@@ -92,6 +94,10 @@ class LocalModeClaimTest(PersonalRepo):
         sha = self.git("rev-parse", "--short", "HEAD")
         self.assertIn(f"선점(로컬 모드 — 원격 없음): feat/G-001-search@{sha}", r.stdout)
         self.assertIn("[~] G-001", self.git("show", "HEAD:docs/REMAINING.md"))
+
+    def test_precheck_tells_local_mode_so_agent_skips_pull(self):
+        r = self.ho("precheck")
+        self.assertIn("원격: 없음(로컬 모드 — pull 생략)", r.stdout)
 
     def test_config_remote_false_skips_push_even_with_origin(self):
         bare = os.path.join(self.root, "origin.git")
@@ -226,6 +232,7 @@ class TeamRecordMrFileTest(unittest.TestCase):
         self.assertIn("docs/handoff/mr/G-001.md", r.stdout)
         tree = self.git("rev-parse", "HEAD^{tree}")
         write(self.a, "docs/handoff/mr/G-001.md", MR_FILE.replace("{tree}", tree))
+        write(self.a, "docs/handoff/mr/G-001-qa.json", '{"tree": "x", "cmd": "t", "exit": 0}\n')
         sh("git", "add", "-A", cwd=self.a)
         sh("git", "commit", "-q", "--amend", "--no-edit", cwd=self.a)
         r = ho(self, "check-record", cwd=self.a)

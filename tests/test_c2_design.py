@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from test_scripts import MR_OK, PY, SCRIPTS, Repo, sh  # noqa: E402
+from test_scripts import MR_OK, PY, SCRIPTS, Repo, seed_design, seed_qa_run, seed_review, sh  # noqa: E402
 
 FAKE = r'''import os, sys
 a = sys.argv
@@ -54,6 +54,7 @@ class C2(Repo):
         os.chmod(posix, 0o755)
         self.called = os.path.join(self.bin, "called")
         self.reply = os.path.join(self.bin, "reply.txt")
+        seed_design()   # 「설계 확인」 '판정: 확정'은 d<N> 기록과 대조된다 — 기본은 이 골·브랜치·기준에서 확정된 상태
 
     def tearDown(self):
         super().tearDown()
@@ -212,6 +213,8 @@ class UncheckedConditionMergeTest(C2):
         self.write("app.py", "def search(q):\n    return q\n")
         import vf_git
         qa = f"- 대상 tree: {vf_git.snapshot()}\n- 코드: 통과\n- 브라우저: 해당 없음 — 서버 함수만, 화면 없음"
+        seed_review()
+        seed_qa_run(qa)
         self.mr(review="- 라운드 1: x\n- 판정: 확정", qa=qa, conds="- [x] 부분 일치 검색\n- [ ] 0건이면 안내 문구")
         r = self.stage("merge")
         self.assertEqual(r.returncode, 1)
@@ -329,6 +332,8 @@ class EveryConditionCheckedTest(C2):
         import vf_git
         qa = f"- 대상 tree: {vf_git.snapshot()}\n- 코드: 통과\n- 브라우저: 해당 없음 — 서버 함수만, 화면 없음"
         rv = "- 라운드 1: x\n- 판정: 확정"
+        seed_review()
+        seed_qa_run(qa)
         self.mr(review=rv, qa=qa, conds="- [x] 부분 일치 검색\n- 0건이면 안내 문구")
         r = self.stage("merge")
         self.assertEqual(r.returncode, 1)
@@ -359,6 +364,7 @@ class StaleGoalStateTest(C2):
         self.mr()
         self.assertEqual(self.stage("review").returncode, 1)                  # 같은 골 — 순서 줄 필요
         self.next_goal()
+        seed_design(goal="G-002", n=2)                                        # G-002 자신의 설계 확인(확정)
         r = self.stage("review")
         self.assertEqual(r.returncode, 0, r.stdout)                           # 다른 골의 meta는 무시
 
@@ -428,6 +434,232 @@ class RecordFileOnlyTest(C2):
         self.assertFalse([x for x in mr_check.merge_checks(qa, cfg) if "재검증" in x])
         self.write("docs/tool.py", "x = 1\n")
         self.assertTrue([x for x in mr_check.merge_checks(qa, cfg) if "재검증" in x])
+
+
+IMPL = "def search(q):\n    return [x for x in ['a'] if q in x]\n"
+R1_OK = "ROUND: 1\nRESOLVED: 없음\nCHECKED: 1 — app.py:2\nVERDICT: CONFIRM\n"
+BLOCKER = "FINDING: F1 | blocker | app.py:2 | 완료 조건 1 위반 | 고친다\n"
+
+
+class DesignRecordTest(C2):
+    """P0-1. 「설계 확인」 '판정: 확정'은 이 골·브랜치·기준의 최근 d<N> 기록이 CONFIRM(blocker 없음)이어야 한다."""
+
+    def setUp(self):
+        super().setUp()
+        for f in ("d1.txt", "d1.meta"):
+            os.remove(os.path.join(".vibe", "review", f))
+        self.mr()
+
+    def test_mr_text_alone_is_not_confirmation(self):
+        r = self.stage("build")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("설계 확인 기록", r.stdout)
+        self.assertIn("review.py --design", r.stdout)
+
+    def test_latest_record_must_confirm_without_blocker(self):
+        seed_design(verdict="CHANGES")
+        r = self.stage("build")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("CHANGES", r.stdout)
+        seed_design(extra=BLOCKER)
+        self.assertIn("blocker", self.stage("build").stdout)
+        seed_design()
+        self.assertEqual(self.stage("build").returncode, 0, self.stage("build").stdout)
+        seed_design(n=2, verdict="CHANGES")                          # 최근 회차가 기준
+        self.assertEqual(self.stage("build").returncode, 1)
+
+    def test_human_verdict_and_skip_need_no_record(self):
+        self.mr(confirm="- 확인 1: blocker 1\n- 확인 2: blocker 1\n- 사람 결정: D-003 — 캐시 생략\n"
+                        "- 판정: 확정 (사람 판정 D-003)")
+        self.assertEqual(self.stage("build").returncode, 0, self.stage("build").stdout)
+        self.mr(confirm=SKIP)
+        self.assertEqual(self.stage("build").returncode, 0, self.stage("build").stdout)
+
+    def test_design_confirm_with_blocker_is_invalid(self):
+        self.mr(confirm="(진행 전)")
+        r = self.codex("review.py", "--design", "1", "--mr", "mr.md", reply=BLOCKER.replace("F1", "D1") + "VERDICT: CONFIRM\n")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("blocker", r.stdout + r.stderr)
+        self.assertTrue(os.path.exists(".vibe/review/d1.txt.failed"))
+        self.assertFalse(os.path.exists(".vibe/review/d1.meta"))
+
+
+class ReviewRecordTest(C2):
+    """P0-1. 「리뷰 기록」 '판정: 확정'은 이 골·브랜치·기준의 최근 r<N> 기록이 CONFIRM(blocker 없음)이어야 한다."""
+
+    def setUp(self):
+        super().setUp()
+        self.write("app.py", IMPL)
+        self.mr(review="- 라운드 1 (전체): blocker 0\n- 판정: 확정")
+
+    def test_mr_text_alone_is_not_confirmation(self):
+        r = self.stage("qa")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("리뷰 기록", r.stdout)
+        self.assertIn("review.py --round", r.stdout)
+
+    def test_latest_round_must_confirm_without_blocker(self):
+        seed_review(verdict="CHANGES")
+        r = self.stage("qa")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("CHANGES", r.stdout)
+        seed_review(extra=BLOCKER)
+        self.assertIn("blocker", self.stage("qa").stdout)
+        seed_review()
+        self.assertEqual(self.stage("qa").returncode, 0, self.stage("qa").stdout)
+        seed_review(n=2, verdict="CHANGES")
+        self.assertEqual(self.stage("qa").returncode, 1)
+
+    def test_review_confirm_with_blocker_is_invalid(self):
+        r = self.codex("review.py", "--round", "1", "--mr", "mr.md", reply=R1_OK.replace("VERDICT", BLOCKER + "VERDICT"))
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("blocker", r.stdout + r.stderr)
+        self.assertTrue(os.path.exists(".vibe/review/r1.txt.failed"))
+        self.assertFalse(os.path.exists(".vibe/review/r1.tree"))
+        self.assertFalse(os.path.exists(".vibe/review/r1.txt"))
+
+
+class ChangeAfterReviewTest(C2):
+    """P0-2. 리뷰 확정 뒤 코드가 바뀌면 다시 리뷰(N+1 라운드, 3이면 사람). 기록 파일만 바뀐 것은 괜찮다."""
+
+    def test_normal_flow_design_review_qa_record_merge(self):
+        import json
+        for f in ("d1.txt", "d1.meta"):
+            os.remove(os.path.join(".vibe", "review", f))
+        sh("git", "checkout", "-q", "main", cwd=self.d)                      # 레포 설정(test_cmd)은 기준에 있다
+        self.write(".vibe-flow.json", json.dumps({"base": "main", "test_cmd": f'"{PY}" -c "print(1)"'}))
+        sh("git", "commit", "-qam", "G-000 test_cmd", cwd=self.d)
+        sh("git", "checkout", "-q", "G-001/test", cwd=self.d)
+        sh("git", "merge", "-q", "--ff-only", "main", cwd=self.d)
+        self.mr(confirm="(진행 전)")
+        r = self.codex("review.py", "--design", "1", "--mr", "mr.md")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        conf = "- 확인 1: blocker 0\n- 판정: 확정"
+        self.mr(confirm=conf)
+        self.assertEqual(self.stage("build").returncode, 0, self.stage("build").stdout)
+        self.write("app.py", IMPL)
+        r = self.codex("review.py", "--round", "1", "--mr", "mr.md", reply=R1_OK)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rv = "- 라운드 1 (전체): blocker 0 · 검토 근거 1/1\n- 판정: 확정"
+        self.mr(confirm=conf, review=rv)
+        self.assertEqual(self.stage("qa").returncode, 0, self.stage("qa").stdout)
+        self.mr(confirm=conf, review=rv, qa="- 브라우저: 해당 없음 — 서버 함수만, 화면 없음\n")
+        r = self.run_script("qa_run.py", "--mr", "mr.md")                     # QA는 리뷰 뒤, 실제 실행 기록
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.write("docs/WORKLOG.md", "# 작업 이력\n- G-001 검색\n")          # QA 뒤 기록만
+        self.write("docs/REMAINING-done-2026-10.md", "# 완료\n- [x] G-001\n")
+        r = self.stage("merge")
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_code_change_after_confirm_needs_next_round(self):
+        self.write("app.py", IMPL)
+        seed_review()
+        self.mr(review="- 라운드 1: x\n- 판정: 확정")
+        self.assertEqual(self.stage("qa").returncode, 0, self.stage("qa").stdout)
+        self.write("app.py", IMPL + "# 확정 뒤 수정\n")
+        for st in ("qa", "merge"):
+            r = self.stage(st)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("리뷰 확정 뒤 코드 변경(app.py)", r.stdout)
+            self.assertIn("review.py --round 2", r.stdout)
+        seed_review(n=3)
+        self.write("app.py", IMPL + "# 3라운드 뒤 수정\n")
+        r = self.stage("qa")
+        self.assertIn("사람 판정 필요", r.stdout)
+
+
+class CompletionItemsTest(C2):
+    """K-01·K-02. 완료 조건 파서는 하나(mr_check.completion_items) — 번호 목록도 같고, 목록 없는 문장은 막는다."""
+
+    def test_numbered_items_are_numbered_in_review_payload(self):
+        self.write("app.py", IMPL)
+        self.mr(conds="1. [ ] 부분 일치 검색\n2. [x] 0건이면 안내 문구")
+        import mr_check
+        with open("mr.md", encoding="utf-8") as f:
+            items = mr_check.completion_items(f.read())
+        self.assertEqual(items, [(False, "부분 일치 검색"), (True, "0건이면 안내 문구")])
+        r = self.run_script("review.py", "--round", "1", "--mr", "mr.md", "--dry")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        with open(r.stdout.strip(), encoding="utf-8") as f:
+            payload = f.read()
+        self.assertIn("1. 부분 일치 검색", payload)
+        self.assertIn("2. 0건이면 안내 문구", payload)
+
+    def test_prose_conditions_are_blocked(self):
+        self.mr(conds="검색이 잘 되면 된다")                                    # 목록 항목 0개
+        r = self.stage("draft")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("완료 조건은 체크리스트 항목으로", r.stdout)
+        self.mr(conds="- [x] 부분 일치 검색\n그리고 빠르면 좋다")
+        self.assertIn("완료 조건은 체크리스트 항목으로", self.stage("draft").stdout)
+        self.mr(conds="- [x] 부분 일치 검색\n  (대소문자 무시)")                   # 들여쓴 이어지는 줄은 항목의 일부
+        self.assertEqual(self.stage("draft").returncode, 0, self.stage("draft").stdout)
+
+
+class RecordNameTest(C2):
+    """K-03. 기록 파일은 정확한 이름·보관 규칙(hindex)만 — PLANET.md·INDEXER.md는 코드 문서다."""
+
+    def test_exact_record_names(self):
+        import mr_check
+        import vf_git
+        cfg = vf_git.config()
+        for f in ("PLAN.md", "PLAN-body.md", "PLAN-검색-흐름.md", "WORKLOG.md", "REMAINING.md",
+                  "REMAINING-done-2026-10.md", "LESSONS.md", "LESSONS-body.md", "LESSONS-body-2.md", "DECISIONS.md",
+                  "DECISIONS-2026-10.md", "DECISIONS-2026-10-2.md", "DECISIONS-INDEX-replaced.md", "NORTHSTAR.md",
+                  "NORTHSTAR-body.md", "INDEX.md", "WORKLOG/INDEX-2026-09.md", "goals/INDEX-done.md", "mr/G-001.md"):
+            self.assertTrue(mr_check.is_record("docs/" + f, cfg), f)
+        for f in ("PLANET.md", "INDEXER.md", "PLANNING.md", "WORKLOGS.md", "REMAINING-x.md", "LESSONSLEARNED.md",
+                  "DECISIONS-old.md", "NORTHSTARS.md", "decisions.md", "INDEX-api.md"):
+            self.assertFalse(mr_check.is_record("docs/" + f, cfg), f)
+
+
+class EstimateFormatTest(C2):
+    """K-04. 이상한 예상치는 예외가 아니라 빠진 항목이다."""
+
+    def test_malformed_estimate_is_a_miss(self):
+        for est in ("예상 ,줄·1파일", "예상 1,2줄·1파일", "예상 5줄·,파일"):
+            self.mr(confirm=f"- 생략: 작은 변경 ({est})")
+            r = self.stage("build")
+            self.assertEqual(r.returncode, 1, est)
+            self.assertNotIn("Traceback", r.stderr, est)
+            self.assertIn("예상 규모", r.stdout, est)
+        self.mr(confirm="- 생략: 작은 변경 (예상 1,200줄·1파일)")
+        self.assertIn("예상 규모가 생략 기준을 넘음", self.stage("build").stdout)
+
+
+class StaleContextTest(C2):
+    """K-05. 같은 골이라도 다른 브랜치·다른 기준(리베이스 등)에서 만든 기록은 묵은 것이다."""
+
+    def setUp(self):
+        super().setUp()
+        self.write("app.py", IMPL)
+        seed_review()
+        self.mr(review="- 라운드 1: x\n- 판정: 확정")
+
+    def test_other_branch_records_are_stale(self):
+        self.assertEqual(self.stage("qa").returncode, 0, self.stage("qa").stdout)
+        sh("git", "branch", "-m", "G-001/other", cwd=self.d)
+        r = self.stage("qa")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("브랜치", r.stdout)
+        self.assertIn("설계 확인 기록", r.stdout)
+        r = self.run_script("review.py", "--round", "2", "--mr", "mr.md", "--dry")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("G-001/test", r.stderr)
+        r = self.run_script("review.py", "--design", "2", "--mr", "mr.md", "--dry")
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_moved_base_makes_records_stale(self):
+        sh("git", "checkout", "-q", "main", cwd=self.d)
+        self.write("other.py", "y = 1\n")
+        sh("git", "add", "other.py", cwd=self.d)
+        sh("git", "commit", "-qm", "G-000 main 진행", cwd=self.d)
+        sh("git", "checkout", "-q", "G-001/test", cwd=self.d)
+        self.assertEqual(self.stage("qa").returncode, 0, self.stage("qa").stdout)   # 갈라진 지점은 그대로
+        sh("git", "merge", "-q", "--ff-only", "main", cwd=self.d)                    # 기준 위로 올림
+        r = self.stage("qa")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("기준", r.stdout)
 
 
 if __name__ == "__main__":

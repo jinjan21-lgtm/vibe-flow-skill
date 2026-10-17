@@ -6,7 +6,8 @@
   python handoff.py claim G-### "<할 일>" <브랜치> [--no-push]
                                                    선점: fetch → 중복 검사 → 브랜치 → REMAINING 착수 줄 커밋 → push
   python handoff.py check-record [--commit <sha>]  완료 기록 검사: 그 커밋(기본 HEAD)에 작업 + WORKLOG·INDEX·REMAINING
-                                                   + MR 본문(<핸드오프>/mr/G-###.md)이 함께 있어야 한다. 골 작업은 QA 뒤
+                                                   + MR 본문(<핸드오프>/mr/G-###.md)·QA 실행 기록(G-###-qa.json, exit 0)이
+                                                   함께 있어야 한다. 골 작업은 QA 뒤
                                                    기록을 마지막 작업 커밋에 amend로 합친다
   원격이 없거나 .vibe-flow.json "remote": false면 로컬 모드 — claim은 로컬 커밋만 한다
 
@@ -21,6 +22,7 @@
 형식은 docs/structure.md. 팀 모드는 작성자(@git user.name)가 필수다.
 """
 import datetime
+import json
 import os
 import re
 import subprocess
@@ -88,7 +90,7 @@ def precheck(cfg):
     import dupe
     mode, hdir, order = detect(cfg)
     me = vf_git.me()
-    print(f"[precheck] 모드: {mode} · 폴더: {hdir} · 나: @{me}")
+    print(f"[precheck] 모드: {mode} · 원격: {'있음 — git pull 먼저' if has_remote(cfg) else '없음(로컬 모드 — pull 생략)'} · 폴더: {hdir} · 나: @{me}")
     if mode == "team" and has_remote(cfg):
         vf_git.git("fetch", "-q", "origin")
         behind = vf_git.git("rev-list", "--count", f"HEAD..origin/{cfg['base']}")
@@ -252,7 +254,24 @@ def mr_file_missing(hdir, gids, files, hi):
             body = re.sub(r"<!--.*?-->|\(진행 전\)|<[^>\n]+>", "", m.group(1), flags=re.S) if m else ""
             if not re.search(r"\w", body):
                 miss.append(f"{p}의 「{name}」이 없거나 비어 있음")
+        miss += qa_record_missing(hdir, g, files, hi)
     return miss
+
+
+def qa_record_missing(hdir, g, files, hi):
+    """QA 실행 기록: 기록 커밋에 <핸드오프>/mr/G-###-qa.json(qa_run.py가 만든 .vibe/qa/<tree>.json 사본)이 exit 0으로."""
+    q = f"{hdir}/mr/{g}-qa.json"
+    if q not in files:
+        return [f"QA 실행 기록 {q}가 이 커밋에 없음 — qa_run.py가 남긴 .vibe/qa/<tree>.json을 복사해 같은 커밋에 넣는다"]
+    try:
+        rec = json.loads(vf_git.git("show", f"{hi}:{q}"))
+    except ValueError:
+        return [f"{q}가 JSON이 아님 — .vibe/qa/<tree>.json을 그대로 복사한다"]
+    if not isinstance(rec, dict) or "exit" not in rec:
+        return [f"{q}에 exit 없음 — qa_run.py 기록이 아님"]
+    if rec["exit"] != 0:
+        return [f"{q}는 exit {rec['exit']} — 통과한 QA 실행 기록이 아님"]
+    return []
 
 
 def check_record(cfg, commit=None):

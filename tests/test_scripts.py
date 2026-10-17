@@ -37,7 +37,7 @@ G-001 시험 골
 - 테스트 계획: 부분 일치 테스트 먼저
 ## 설계 확인
 - 확인 1: blocker 0
-- 판정: 확정
+- 판정: 확정 (사람 판정 D-001)
 ## 계획 vs 실제
 {plan}
 ## 리뷰 기록
@@ -45,6 +45,54 @@ G-001 시험 골
 ## QA 결과
 {qa}
 """
+
+
+def _vibe_record(name, text):
+    """.vibe/review 기록을 쓴다. .vibe/는 스냅숏에서 뺀다(.git/info/exclude) — 기록이 작업물 비교에 끼지 않게."""
+    with open(os.path.join(".git", "info", "exclude"), "a", encoding="utf-8") as f:
+        f.write("\n.vibe/\n")
+    os.makedirs(os.path.join(".vibe", "review"), exist_ok=True)
+    with open(os.path.join(".vibe", "review", name), "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
+
+def seed_review(goal="G-001", n=1, verdict="CONFIRM", extra=""):
+    """지금 작업물·브랜치·기준의 리뷰 라운드 기록(r<N>.txt·r<N>.tree). mr_check는 「리뷰 기록」의 '판정: 확정'을
+    이 기록과 대조한다 — MR 문구만으로는 확정이 아니다."""
+    import mr_check
+    import vf_git
+    _vibe_record(f"r{n}.txt", f"ROUND: {n}\n{extra}VERDICT: {verdict}\n")
+    _vibe_record(f"r{n}.tree", vf_git.snapshot() + "\n" + mr_check.record_stamp(goal, vf_git.config()))
+
+
+def seed_design(goal="G-001", n=1, verdict="CONFIRM", extra=""):
+    """지금 브랜치·기준의 설계 확인 기록(d<N>.txt·d<N>.meta). 「설계 확인」 '판정: 확정'은 이 기록과 대조된다."""
+    import mr_check
+    import vf_git
+    _vibe_record(f"d{n}.txt", f"{extra}VERDICT: {verdict}\n")
+    _vibe_record(f"d{n}.meta", mr_check.record_stamp(goal, vf_git.config()) + "diverged: no\n")
+
+
+def seed_qa_run(body):
+    """「QA 결과」가 주장하는 실행 증거를 만든다 — merge 검사(qa_run.verify)는 손으로 쓴 '통과'를 증거와 대조한다.
+    '코드: 통과'면 .vibe/qa/<tree>.json(exit 0), '브라우저'의 캡처 링크면 그 파일. 캡처 파일은 스냅숏에서 뺀다."""
+    import json
+    import vf_git
+    m = re.search(r"대상 (?:commit|tree):\s*`?([0-9a-f]{7,40})", body)
+    tree = vf_git.tree_of(m.group(1)) if m else ""
+    if tree and re.search(r"^-\s*코드:\s*통과(?=$|[\s(（—–])", body, re.M):
+        with open(os.path.join(".git", "info", "exclude"), "a", encoding="utf-8") as f:
+            f.write("\n.vibe/\n")
+        os.makedirs(os.path.join(".vibe", "qa"), exist_ok=True)
+        with open(os.path.join(".vibe", "qa", tree + ".json"), "w", encoding="utf-8") as f:
+            json.dump({"tree": tree, "cmd": "test", "exit": 0}, f)
+    for p in re.findall(r"!\[[^\]]*\]\(([^)\s]+)\)", body):
+        if not re.match(r"(?i)https?://", p) and not os.path.exists(p):
+            with open(os.path.join(".git", "info", "exclude"), "a", encoding="utf-8") as f:
+                f.write(f"\n/{p}\n")
+            os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(b"\x89PNG")
 
 
 def sh(*args, cwd, ok=True):
@@ -174,6 +222,8 @@ class MrCheckTest(Repo):
 
     def check(self, body, stage):
         self.write("mr.md", body)
+        seed_review()   # 리뷰 확정은 .vibe/review 기록과 대조된다 — 지금 작업물을 리뷰가 확정한 것으로 둔다
+        seed_qa_run(body)   # QA 통과 주장은 실행 기록(qa_run)과 대조된다
         return self.run_script("mr_check.py", "mr.md", "--stage", stage)
 
     def body(self, plan="(진행 전)", review="(진행 전)", qa="(진행 전)"):
@@ -299,7 +349,8 @@ class ReviewGateTest(Repo):
         self.write("b.py", "b = 1\n")
         os.makedirs(".vibe/review", exist_ok=True)
         self.write(".gitignore", ".vibe/\nmr.md\n")
-        self.write(".vibe/review/r2.tree", vf_git.snapshot() + "\ngoal: G-001\n")   # 라운드 2 시점 + 골
+        import mr_check   # 기록은 골·브랜치·기준까지 맞아야 유효(K-05)
+        self.write(".vibe/review/r2.tree", vf_git.snapshot() + "\n" + mr_check.record_stamp("G-001", vf_git.config()))
         self.write(".vibe/review/r2.txt", "VERDICT: CHANGES\n")  # 끝난 라운드 = 판정 출력 + 스냅샷
         self.write("a.py", "a = 2  # 열린 지적 수정\n")
         self.write("b.py", "b = 2  # 다른 변경\n")
@@ -316,7 +367,8 @@ class ReviewGateTest(Repo):
         self.write(".gitignore", ".vibe/\nmr.md\n")
         self.write("a.py", "a = 1  # 라운드 1 이전\n")
         os.makedirs(".vibe/review", exist_ok=True)
-        self.write(".vibe/review/r1.tree", vf_git.snapshot() + "\ngoal: G-001\n")
+        import mr_check   # 기록은 골·브랜치·기준까지 맞아야 유효(K-05)
+        self.write(".vibe/review/r1.tree", vf_git.snapshot() + "\n" + mr_check.record_stamp("G-001", vf_git.config()))
         self.write(".vibe/review/r1.txt", "FINDING: R1 | blocker | a.py:1 | x | y\nVERDICT: CHANGES\n")
         self.write("c.py", "c = 1  # 라운드 1 이후\n")
         r = self.review("--round", "2", "--dry")
@@ -467,6 +519,10 @@ class DesignGateTest(Repo):
         r = self.check(self.body(confirm="(진행 전)"), "build")
         self.assertEqual(r.returncode, 1)
         self.assertIn("설계 확인", r.stdout)
+        r = self.check(self.body(), "build")                 # MR 문구만으로는 확정이 아니다 — d<N> 기록과 대조
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("설계 확인 기록", r.stdout)
+        seed_design()
         self.assertEqual(self.check(self.body(), "build").returncode, 0)
 
     def test_more_than_two_design_checks_blocked(self):
@@ -626,6 +682,7 @@ class TeamHandoffTest(unittest.TestCase):
             open(p, "w", encoding="utf-8", newline="\n").write(t)
             os.makedirs(os.path.join(cwd, "docs/handoff/mr"), exist_ok=True)
             w("docs/handoff/mr/G-001.md", MR_OK, "w")   # 기록 커밋에 MR 본문(검증 증거)
+            w("docs/handoff/mr/G-001-qa.json", '{"tree": "x", "cmd": "t", "exit": 0}\n', "w")   # QA 실행 기록 사본
         sh("git", "add", "-A", cwd=cwd)
         sh("git", "commit", "-qm", "G-001 거래처 검색", cwd=cwd)
 
@@ -1114,6 +1171,8 @@ class FlexibilityTest(Repo):
 
     def check(self, body, stage):
         self.write("mr.md", body)
+        seed_review()   # 리뷰 확정은 .vibe/review 기록과 대조된다
+        seed_qa_run(body)
         return self.run_script("mr_check.py", "mr.md", "--stage", stage)
 
     def qa(self, browser):
@@ -1149,7 +1208,7 @@ class FlexibilityTest(Repo):
         self.write("mr.md", MR_OK.format(plan="(진행 전)", review="(진행 전)", qa="(진행 전)"))
         r = self.run_script("mr_check.py", "mr.md", "--next")
         self.assertIn("review → 세부 스킬 vibe-dev", r.stdout)            # 설계 확정, 계획 vs 실제 없음 → 구현 중
-        no_design = MR_OK.replace("- 확인 1: blocker 0\n- 판정: 확정\n", "")
+        no_design = MR_OK.replace("- 확인 1: blocker 0\n- 판정: 확정 (사람 판정 D-001)\n", "")
         self.write("mr.md", no_design.format(plan="같음", review="(진행 전)", qa="(진행 전)"))
         r = self.run_script("mr_check.py", "mr.md", "--next")
         self.assertIn("build → 세부 스킬 vibe-design", r.stdout)         # "리뷰만"이라도 설계 확인부터

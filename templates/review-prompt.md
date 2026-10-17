@@ -22,4 +22,5 @@ FINDING: <id> | <blocker|major|minor|nit|확인 요청> | <파일:줄> | <근거
 (지적마다 한 줄. 없으면 FINDING 줄을 쓰지 않음)
 VERDICT: CONFIRM   ← 열린 blocker가 없을 때
 VERDICT: CHANGES   ← 열린 blocker가 있을 때
+(`FINDING: … | blocker | …` 줄이 하나라도 있으면 CONFIRM을 쓰지 않는다 — 둘이 같이 있으면 응답 전체가 무효)
 

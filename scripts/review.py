@@ -11,8 +11,9 @@
 라운드 1: 기준 대비 지금 작업물 전체 diff
 라운드 2: 라운드 1 시점 스냅샷 대비 diff + 라운드 1 지적
 라운드 3: 라운드 2 시점 스냅샷 대비 diff 중 --files만 + 열린 지적
-결과: .vibe/review/r<N>.txt (Codex 원문), r<N>.tree (그 시점 스냅샷 + goal), d<N>.meta (골·기준 tree·설계 확인 때
-코드가 이미 바뀌었는지). 다른 골의 r<N>.tree·d<N>.meta는 다음 회차의 근거로 쓰지 않는다.
+결과: .vibe/review/r<N>.txt (Codex 원문), r<N>.tree (그 시점 스냅샷 + goal·branch·base), d<N>.meta (골·브랜치·기준
+tree·설계 확인 때 코드가 이미 바뀌었는지). 다른 골·브랜치·기준의 기록은 다음 회차의 근거가 아니다(mr_check도 같다).
+VERDICT: CONFIRM인데 blocker FINDING이 있는 응답은 모순이라 무효(.failed).
 
 Codex 호출 전에 mr_check 단계 검사를 직접 돌린다(라운드: review, 설계: draft). 막히면 exit 1.
 설계 확인 입력의 파일 내용은 기준 커밋의 것이다. 라운드 1 응답은 완료 조건 번호(1..N)마다 정확히 한 줄
@@ -62,25 +63,37 @@ def invalidate(*paths):
             os.replace(p, p + ".failed")
 
 
+def rec_path(kind, k):
+    return os.path.join(D, f"{kind}{k}.{'meta' if kind == 'd' else 'tree'}")
+
+
 def done(kind, k, goal):
-    """이 골의 그 회차가 끝났는가: VERDICT가 있는 출력 + 같은 골이 적힌 기록(라운드는 .tree, 설계는 .meta).
-    다른 골(또는 골 표시 없는 예전) 기록은 이전 작업의 것이라 다음 회차의 근거가 되지 않는다."""
+    """이 골의 그 회차가 끝났는가: VERDICT가 있는 출력 + 지금 맥락(같은 골·브랜치·기준)의 기록(라운드 .tree, 설계 .meta).
+    다른 골·다른 브랜치·리베이스 전 기준의 기록은 이전 작업의 것이라 다음 회차의 근거가 되지 않는다."""
     import mr_check
     out = os.path.join(D, f"{kind}{k}.txt")
-    if not os.path.exists(out) or not re.search(r"^VERDICT:\s*(CONFIRM|CHANGES)", read(out), re.M):
+    if not os.path.exists(out) or not mr_check.VERDICT.search(read(out)):
         return False
-    rec = os.path.join(D, f"{kind}{k}.{'meta' if kind == 'd' else 'tree'}")
-    return bool(goal) and mr_check.record_goal(rec) == goal
+    return not mr_check.record_problem(rec_path(kind, k), goal, vf_git.config())
 
 
 def stale_note(kind, k, goal):
-    """기록이 다른 골의 것이면 그 사실을 한 줄로(막힌 이유를 숨기지 않는다)."""
+    """기록이 지금 맥락의 것이 아니면 그 이유를 한 줄로(막힌 이유를 숨기지 않는다)."""
     import mr_check
-    rec = os.path.join(D, f"{kind}{k}.{'meta' if kind == 'd' else 'tree'}")
-    old = mr_check.record_goal(rec) if os.path.exists(rec) else None
-    if old is None or old == goal:
+    rec = rec_path(kind, k)
+    if not os.path.exists(rec):
         return ""
-    return f" {os.path.basename(rec)}는 {'골 표시 없는 예전 기록' if not old else f'다른 골({old})의 것'}입니다(지금 골: {goal or '없음'})."
+    why = mr_check.record_problem(rec, goal, vf_git.config())
+    return f" {why}." if why else ""
+
+
+def contradiction(text):
+    """VERDICT: CONFIRM인데 blocker FINDING이 있으면 모순 — 판정이 아니다(review-prompt.md: CONFIRM은 열린 blocker 0)."""
+    import mr_check
+    bl = mr_check.blockers(text)
+    if bl and re.search(r"^VERDICT:\s*CONFIRM", text, re.M):
+        return "VERDICT: CONFIRM인데 blocker FINDING이 있음(" + ", ".join(x["id"] for x in bl) + ")"
+    return ""
 
 
 def tree_sha(path):
@@ -98,10 +111,9 @@ def stage_gate(mr_path, stage):
 
 
 def conditions(mr):
-    """「완료 조건」 칸의 항목 문구."""
-    m = re.search(r"^##\s+완료 조건\s*\n(.*?)(?=^##\s|\Z)", re.sub(r"<!--.*?-->", "", mr, flags=re.S), re.M | re.S)
-    rows = re.findall(r"^\s*[-*]\s*(?:\[[ xX]\])?\s*(.+?)\s*$", m.group(1), re.M) if m else []
-    return [r for r in rows if r]
+    """「완료 조건」 항목 문구 — mr_check.completion_items와 같은 파서(번호 목록 '1. [x] …'도 같다)."""
+    import mr_check
+    return [t for _, t in mr_check.completion_items(mr) if t]
 
 
 def numbered(conds):
@@ -129,13 +141,8 @@ def checked_problems(text, conds):
 
 
 def findings(text):
-    rows = []
-    for line in text.splitlines():
-        m = re.match(r"^FINDING:\s*(.+)$", line.strip())
-        if m:
-            parts = [p.strip() for p in m.group(1).split("|")]
-            rows.append({"id": parts[0], "sev": parts[1] if len(parts) > 1 else "?", "raw": line.strip()})
-    return rows
+    import mr_check
+    return mr_check.findings(text)
 
 
 def design_system(old, cur):
@@ -201,8 +208,12 @@ def design_review(n, mr_path, dry):
     if not v:
         invalidate(out)
         sys.exit(f"[design] Codex 응답에 VERDICT가 없습니다 — 무효 ({out}.failed).")
+    bad = contradiction(text)
+    if bad:
+        invalidate(out)
+        sys.exit(f"[design] {bad} — 모순된 응답이라 무효, 판정을 적지 않습니다 ({out}.failed). 같은 회차를 다시 돌립니다.")
     with open(os.path.join(D, f"d{n}.meta"), "w", encoding="utf-8") as f:
-        f.write(f"goal: {goal}\ndiverged: {'yes' if early else 'no'}\nbase: {base}\nfiles: {', '.join(early)}\n")
+        f.write(mr_check.record_stamp(goal, cfg) + f"diverged: {'yes' if early else 'no'}\nfiles: {', '.join(early)}\n")
     fs = findings(text)
     print(f"DESIGN {n}: VERDICT {v.group(1)} · " + (" · ".join(f"{x['sev']}" for x in fs) or "지적 없음"))
     for x in fs:
@@ -279,6 +290,10 @@ def main():
     if not v:
         invalidate(out)
         sys.exit(f"[review] Codex 응답에 VERDICT가 없습니다 — 무효, 판정을 적지 않습니다 ({out}.failed).")
+    bad = contradiction(text)
+    if bad:
+        invalidate(out)
+        sys.exit(f"[review] {bad} — 모순된 응답이라 무효, 판정을 적지 않습니다 ({out}.failed). 같은 라운드를 다시 돌립니다.")
     if n == 1:
         bad = checked_problems(text, conds)
         if bad:
@@ -287,7 +302,7 @@ def main():
                      f"판정을 적지 않습니다 ({out}.failed).\n" + "\n".join(f" - {c}" for c in bad)
                      + "\n→ 같은 라운드 1을 다시 돌립니다.")
     with open(os.path.join(D, f"r{n}.tree"), "w", encoding="utf-8") as f:
-        f.write(f"{cur}\ngoal: {goal}\n")
+        f.write(f"{cur}\n" + mr_check.record_stamp(goal, vf_git.config()))
     fs = findings(text)
     checked = len(re.findall(r"^CHECKED:\s*\S", text, re.M))
     count = {}

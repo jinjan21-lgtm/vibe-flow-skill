@@ -11,7 +11,7 @@ vibe-flow의 첫 단계. 규칙 원본은 vibe-flow 폴더(팀 `.claude/skills/v
 
 ## 순서
 
-1. `git pull` → `python $S/handoff.py precheck`. 출력의 **읽을 순서만** 읽는다. 인덱스 구조면 INDEX들만이고 총량이 함께 나온다(목표 12,000자). 결정·작업 기록 본문은 지금 열지 않는다.
+1. `python $S/handoff.py precheck` — 첫 줄에 원격 여부가 나온다. 원격 모드면 `git pull` 뒤 precheck를 다시, 로컬 모드(원격 없음·`"remote": false`)면 pull 없이 그대로. 출력의 **읽을 순서만** 읽는다. 인덱스 구조면 INDEX들만이고 총량이 함께 나온다(목표 12,000자). 결정·작업 기록 본문은 지금 열지 않는다.
 2. 이어 갈 착수·보류·결정 대기·후보가 있으면 그것을 사용자에게 먼저 보인다.
 3. 골: `python $S/goal_gate.py list`. 맞는 활성 골이 없으면 `candidate "<제목>"` → 네 칸 채우기 → `judge <후보> --apply`. 판정(CREATE/REJECT/MERGE)을 그대로 따른다. 노스스타가 draft면 판정이 거부된다 — 사용자 확정을 요청하고 멈춘다.
 4. 선점: `python $S/handoff.py claim G-### "<할 일>" <접두사>/G-###-<주제>`. 중복이면 여기서 멈추고 합류·골 나누기를 사용자에게 묻는다.
