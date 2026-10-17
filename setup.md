@@ -8,6 +8,7 @@
 S=~/.claude/skills/vibe-flow
 mkdir -p docs/goals && cp $S/templates/NORTHSTAR.md docs/ && cp $S/templates/G-000-maintenance.md docs/goals/
 python $S/scripts/goal_gate.py install-hook
+echo '.vibe/' >> .gitignore                 # MR 본문·리뷰 기록 등 로컬 작업 파일
 echo '{"base":"main","test_cmd":"npm test","dev_url":"https://dev.example.com"}' > .vibe-flow.json
 ```
 
@@ -29,7 +30,7 @@ cat > .vibe-flow.json <<'EOF'
 EOF
 ```
 
-`.gitattributes`에 `docs/handoff/WORKLOG/*.md merge=union`을 더한다(토픽 파일도 여러 사람이 줄을 추가함). 각 참여자는 복제 후 한 번 `python .claude/skills/vibe-flow/scripts/goal_gate.py install-hook`을 실행한다(훅은 커밋되지 않는 로컬 설정).
+`.gitattributes`에 `docs/handoff/WORKLOG/*.md merge=union`을 더한다(토픽 파일도 여러 사람이 줄을 추가함). `.gitignore`에 `.vibe/`를 더한다(MR 본문·리뷰 기록·이전 스냅숏 등 로컬 작업 파일 — 개인 레포도 같음). 각 참여자는 복제 후 한 번 `python .claude/skills/vibe-flow/scripts/goal_gate.py install-hook`을 실행한다(훅은 커밋되지 않는 로컬 설정).
 
 team-handoff `SKILL.md`, `CLAUDE.md`, `AGENTS.md`에는 골 ID 표기와 `handoff.py precheck/claim/check-record` 호출 지점을 넣는다 — 형식은 structure.md의 표 그대로.
 
@@ -91,7 +92,7 @@ for n in vibe-claim vibe-design vibe-dev vibe-review vibe-qa vibe-record; do
 
 ## 대형 프로젝트 — 인덱스 구조로 옮기기
 
-핸드오프 문서가 커져 세션 시작 읽기량이 목표(12,000자)를 넘으면 한 번 옮긴다. 형식은 structure.md 「인덱스 계층」.
+핸드오프 문서가 커져 세션 시작 읽기량이 목표(12,000자)를 넘으면 한 번 옮긴다(`handoff.py precheck`가 자 수를 보여 준다). **넘지 않으면 옮기지 않는다** — 작은 레포에서는 INDEX 머리말 때문에 오히려 읽기량이 는다(시험: 263자 → 2,279자). 형식은 structure.md 「인덱스 계층」.
 
 ```bash
 git checkout -b chore/G-000-handoff-index

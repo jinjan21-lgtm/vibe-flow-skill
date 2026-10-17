@@ -1,6 +1,6 @@
 ---
 name: vibe-record
-description: Use when a task's work is done and handoff records must be written — after QA of a goal MR, when recording a decision (D-nnn) or lesson (L-nnn), when the user says "기록해", "결정 남겨", "인덱스 정리", or when vibe-flow reaches merge/record.
+description: Use when a goal (G-###) MR has passed QA and its handoff records must go into the same commit, when recording a decision (D-nnn) or lesson (L-nnn) number, when the user says "결정 남겨", "인덱스 정리", "보관(archive)", or when vibe-flow reaches merge/record. For a plain end-of-task work log without a goal MR, the handoff skill (team-handoff / session-handoff) applies.
 ---
 
 # vibe-record — 기록 · 인덱스 · 보관
