@@ -295,11 +295,13 @@ class ExportEvidenceTest(PersonalRepo):
         rec = {"tree": tree, "cmd": "t", "exit": 0}
         write(self.d, f".vibe/qa/{tree}.json", json.dumps(rec))
         write(self.d, ".vibe/review/d1.txt", "설계 원문\nVERDICT: CONFIRM\n")
-        write(self.d, ".vibe/review/d1.meta", "goal: G-001\nbranch: b\nbase: x\n")
+        br = self.git("symbolic-ref", "--short", "HEAD")   # 지금 브랜치·기준 도장(다른 맥락 원문은 export에서 빠진다)
+        st = f"branch: {br}\nbase: {self.git('rev-parse', 'HEAD^{tree}')}\n"
+        write(self.d, ".vibe/review/d1.meta", "goal: G-001\n" + st)
         write(self.d, ".vibe/review/r1.txt", "리뷰 원문\nVERDICT: CONFIRM\n")
-        write(self.d, ".vibe/review/r1.tree", f"{tree}\ngoal: G-001\n")
+        write(self.d, ".vibe/review/r1.tree", f"{tree}\ngoal: G-001\n" + st)
         write(self.d, ".vibe/review/r2.txt", "남의 골\nVERDICT: CHANGES\n")
-        write(self.d, ".vibe/review/r2.tree", f"{tree}\ngoal: G-002\n")
+        write(self.d, ".vibe/review/r2.tree", f"{tree}\ngoal: G-002\n" + st)
         r = self.ho("export-evidence", "G-001")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         rv = open(os.path.join(self.d, "docs/mr/G-001-review.md"), encoding="utf-8").read()

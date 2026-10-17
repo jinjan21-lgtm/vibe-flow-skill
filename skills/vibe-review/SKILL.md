@@ -11,14 +11,14 @@ description: Use when a goal MR/PR needs code review, when the user says "리뷰
 
 ## 진입 조건 (단독으로 불려도 같다)
 
-`python $S/mr_check.py <mr> --stage review` 통과. 실패하면 리뷰를 돌리지 않는다 — `python $S/mr_check.py <mr> --next`가 알려 주는 단계(대개 설계 확인 또는 「계획 vs 실제」)를 사용자에게 한 줄로 알리고 그 세부 스킬로 간다. "앞 단계는 다 했다"는 말보다 스크립트 결과가 기준이다.
+`python $S/mr_check.py <mr> --stage review` 통과. 실패하면 리뷰를 돌리지 않는다 — `mr_check.py <mr> --next`가 알려 주는 단계를 사용자에게 한 줄로 알리고 그 세부 스킬로 간다. "앞 단계는 다 했다"는 말보다 스크립트 결과가 기준이다.
 
 ## 순서
 
 1. 테스트를 돌려 `.vibe/test-summary.txt`.
-2. `python $S/review.py --round 1 --mr <mr> --tests .vibe/test-summary.txt` (전체). review.py도 단계 검사를 돌려 막히면 Codex를 부르지 않는다. 라운드 1 응답은 완료 조건 번호(1..N)마다 정확히 한 줄 `CHECKED: <번호> — <근거>`가 있어야 유효(누락·중복이면 `.failed`, 다시 돌린다). 다른 골·브랜치·기준(리베이스 전)의 `.vibe/review` 기록은 쓰이지 않는다. CONFIRM인데 blocker FINDING이 있으면 무효.
-3. blocker·major를 고치고 `--round 2`(지난 라운드 이후 diff), 그래도 열린 지적이 있으면 `--round 3 --files <고친 파일>`. 실패한 라운드는 끝난 것이 아니다.
-4. 라운드마다 「리뷰 기록」에 한 줄(라운드 1은 `검토 근거 N/N`), 최근 `r<N>.txt`가 CONFIRM일 때만 `- 판정: 확정` — mr_check가 기록과 대조한다. 3라운드 뒤 blocker가 남으면 `판정: 보류`, 사용자에게.
+2. `python $S/review.py --round 1 --mr <mr> --tests .vibe/test-summary.txt` (전체). review.py도 단계 검사를 돌려 막히면 Codex를 부르지 않는다. 라운드 1 응답은 완료 조건 번호(1..N)마다 `CHECKED: <번호> — <근거>` 한 줄이 있어야 유효(아니면 `.failed`, 다시). 다른 골·브랜치·기준의 기록은 쓰이지 않는다. CONFIRM + blocker FINDING은 무효.
+3. blocker·major를 고치고 `--round 2`(지난 라운드 이후 diff), 그래도 열린 지적이 있으면 `--round 3 --files <고친 파일>`. 실패한 라운드는 끝난 것이 아니다. 2·3라운드 CONFIRM은 열린 blocker·major ID가 모두 `RESOLVED`에 있어야 유효(major만 `CARRY: <id> — 골 후보 <사유>`). 안 닫힌 blocker는 qa·merge도 막는다.
+4. 라운드마다 「리뷰 기록」에 한 줄(라운드 1은 `검토 근거 N/N`), 최근 `r<N>.txt`가 CONFIRM일 때만 `- 판정: 확정`(mr_check가 대조). 3라운드 뒤 blocker가 남으면 `판정: 보류`, 사용자에게. 사용자 결정은 `review-loop.md` 「사람 결정 뒤 재개」(`- 사람 결정: D-nnn — <blocker ID>`).
 5. 근거(파일:줄 + 재현 경로 또는 위반한 완료 조건) 없는 blocker는 확인 요청으로 강등하고, 확인한 내용을 다음 라운드에 넣는다.
 6. 확정 뒤 코드를 바꾸면 `--stage qa`·`merge`가 막는다 → `--round <N+1> --files <바뀐 파일>`, 3라운드였으면 사용자에게.
 7. `python $S/mr_check.py <mr> --stage qa` 통과 → 다음은 **vibe-qa**. 리뷰 확정은 QA가 아니다. 완료 조건은 QA가 확인하고 `[x]`로 바꾼다 — `[x]` 아닌 항목이 남으면 merge가 막힌다.
@@ -30,6 +30,6 @@ description: Use when a goal MR/PR needs code review, when the user says "리뷰
 | "급하다니 설계 확인 없이 리뷰부터" | `--stage review`가 막는다. 준수 경로를 먼저 알린다 |
 | "한 라운드만 더" | 3라운드가 끝. 4라운드는 스크립트가 거부 |
 | "이 지적은 내가 보기엔 아니다" | 근거로 반박하고 확인 요청으로. 혼자 닫지 않는다 |
-| "리뷰 통과했으니 머지" | QA가 별개다 |
+| "리뷰 통과했으니 머지" | QA는 별개 |
 | "확정 뒤 한 줄만 고쳤다" | 다시 리뷰. 스크립트가 tree로 잡는다 |
 | "사용자가 건너뛰라 했다" | 우회 명령은 사용자가 직접 친다. 일어난 우회는 REMAINING에 부채로 |

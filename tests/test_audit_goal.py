@@ -60,6 +60,7 @@ class ReviewCodexFailureTest(ts.Repo):
         self.write("mr.md", ts.MR_OK.format(plan="같음", review="", qa=""))
         self.write(".gitignore", ".vibe/\nmr.md\nfakebin/\n")
         self.write("app.py", "x = 1\n")
+        ts.seed_design(n=1, verdict="CHANGES"); ts.seed_design(n=2, verdict="CHANGES")   # MR_OK 사람 판정의 전제
 
     def review(self, mode, *args):
         return subprocess.run([PY, os.path.join(SCRIPTS, "review.py"), "--mr", "mr.md", *args], cwd=self.d,
@@ -265,6 +266,16 @@ class GoalIdRemoteReserveTest(unittest.TestCase):
         r = self.reserve(self.a)
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(r.stdout.strip(), "")
+
+
+class HelpFlagTest(ts.Repo):
+    """E2E t3v7: `candidate --help`가 「--help」 제목의 골 후보를 만들었다 — 도움말은 아무것도 쓰지 않는다."""
+    def test_candidate_help_writes_nothing(self):
+        before = sh("git", "status", "--porcelain", "--untracked-files=all", cwd=self.d).stdout
+        r = subprocess.run([PY, os.path.join(SCRIPTS, "goal_gate.py"), "candidate", "--help"], cwd=self.d,
+                           capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(sh("git", "status", "--porcelain", "--untracked-files=all", cwd=self.d).stdout, before)
 
 
 class GoalGateCodexExitTest(unittest.TestCase):

@@ -179,5 +179,13 @@ class ClaimKeyTest(TmpRepo):
         self.assertTrue(any("feat/G-123-b" in x and "기간을 넘김" in x for x in w), w)
 
 
+class LinkFalsePositiveTest(unittest.TestCase):
+    """E2E t4v7: WORKLOG의 `inv["discount"](합계)`를 링크로 읽어 lint가 「끊긴 링크」로 막았다."""
+    def test_prose_parenthesis_is_not_a_link(self):
+        import hindex
+        got = list(hindex.links_of('inv["discount"](합계), [본문](a.md#x), [토픽](WORKLOG/ui.md)'))
+        self.assertEqual(got, ["a.md#x", "WORKLOG/ui.md"])
+
+
 if __name__ == "__main__":
     unittest.main()

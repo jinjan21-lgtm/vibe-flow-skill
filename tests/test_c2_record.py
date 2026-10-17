@@ -206,7 +206,7 @@ class TeamRecordMrFileTest(unittest.TestCase):
             "docs/handoff/WORKLOG/proto.md": "# proto\n",
             "docs/handoff/NORTHSTAR.md": "# 노스스타\n<!-- status: confirmed -->\n## 목적\n검색\n",
             "docs/handoff/goals/G-001-search.md": GOAL.format(gid="G-001", st="active"),
-            ".vibe-flow.json": '{"base": "main", "branch_prefixes": ["proto"]}',
+            ".vibe-flow.json": '{"base": "main", "branch_prefixes": ["proto"], "test_cmd": "t"}',
             "app.py": "# app\n",
         }.items():
             write(seed, p, t)

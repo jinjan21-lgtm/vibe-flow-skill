@@ -11,9 +11,11 @@
 라운드 1: 기준 대비 지금 작업물 전체 diff
 라운드 2: 라운드 1 시점 스냅샷 대비 diff + 라운드 1 지적
 라운드 3: 라운드 2 시점 스냅샷 대비 diff 중 --files만 + 열린 지적
-결과: .vibe/review/r<N>.txt (Codex 원문), r<N>.tree (그 시점 스냅샷 + goal·branch·base), d<N>.meta (골·브랜치·기준
-tree·설계 확인 때 코드가 이미 바뀌었는지). 다른 골·브랜치·기준의 기록은 다음 회차의 근거가 아니다(mr_check도 같다).
+결과: .vibe/review/r<N>.txt (Codex 원문), r<N>.tree (그 시점 스냅샷 + goal·branch·base·conds·contract), d<N>.meta (골·브랜치·기준
+tree·설계 확인 때 코드가 이미 바뀌었는지·design: 「설계」 해시). 다른 골·브랜치·기준의 기록은 다음 회차의 근거가 아니다(mr_check도 같다).
 VERDICT: CONFIRM인데 blocker FINDING이 있는 응답은 모순이라 무효(.failed).
+지적 장부: 라운드 N>1의 CONFIRM은 앞 라운드에서 열린 blocker·major ID를 모두 RESOLVED에 적어야 유효하다
+(major만 'CARRY: <id> — 골 후보 <사유>' 가능, blocker는 불가). 빠지면 무효(.failed).
 
 Codex 호출 전에 mr_check 단계 검사를 직접 돌린다(라운드: review, 설계: draft). 막히면 exit 1.
 설계 확인 입력의 파일 내용은 기준 커밋의 것이다. 라운드 1 응답은 완료 조건 번호(1..N)마다 정확히 한 줄
@@ -94,6 +96,22 @@ def contradiction(text):
     if bl and re.search(r"^VERDICT:\s*CONFIRM", text, re.M):
         return "VERDICT: CONFIRM인데 blocker FINDING이 있음(" + ", ".join(x["id"] for x in bl) + ")"
     return ""
+
+
+def ledger_problems(text, prev):
+    """라운드 N>1의 CONFIRM: 앞 라운드에서 열린 blocker·major는 이 출력의 RESOLVED에 있어야 한다
+    (major만 'CARRY: <id> — 골 후보 <사유>'로 넘길 수 있다). 빠지면 무효 — 열린 지적을 덮은 확정이다."""
+    import mr_check
+    open_ = mr_check.ledger(prev, mr_check.GATE_SEVS)
+    res, car = mr_check.resolved_ids(text), mr_check.carried_ids(text)
+    bad = []
+    for i, (sev, n) in sorted(open_.items()):
+        if i in res or (sev == "major" and i in car):
+            continue
+        bad.append(f"열린 blocker {i}(라운드 {n})는 CARRY로 넘길 수 없음 — RESOLVED로 닫아야 CONFIRM" if i in car
+                   else f"열린 {sev} {i}(라운드 {n})가 RESOLVED에 없음" + (" (major는 'CARRY: <id> — 골 후보 <사유>' 가능)"
+                                                                         if sev == "major" else ""))
+    return bad
 
 
 def tree_sha(path):
@@ -213,7 +231,8 @@ def design_review(n, mr_path, dry):
         invalidate(out)
         sys.exit(f"[design] {bad} — 모순된 응답이라 무효, 판정을 적지 않습니다 ({out}.failed). 같은 회차를 다시 돌립니다.")
     with open(os.path.join(D, f"d{n}.meta"), "w", encoding="utf-8") as f:
-        f.write(mr_check.record_stamp(goal, cfg) + f"diverged: {'yes' if early else 'no'}\nfiles: {', '.join(early)}\n")
+        f.write(mr_check.record_stamp(goal, cfg) + f"diverged: {'yes' if early else 'no'}\nfiles: {', '.join(early)}\n"
+                + f"design: {mr_check.design_hash(read(mr_path))}\n")   # 확인 뒤 「설계」가 바뀌면 build부터 막는다
     fs = findings(text)
     print(f"DESIGN {n}: VERDICT {v.group(1)} · " + (" · ".join(f"{x['sev']}" for x in fs) or "지적 없음"))
     for x in fs:
@@ -270,9 +289,13 @@ def main():
         if os.path.exists(p):
             prev += f"\n--- 라운드 {k} ---\n" + read(p)
     conds = conditions(mr)
+    prev_rounds = [(k, t) for k, t in mr_check.valid_rounds("r", goal, vf_git.config()) if k < n]
+    open_ = mr_check.ledger(prev_rounds, ("blocker", "major"))
+    ledger_in = ("\n[열린 지적 — RESOLVED 또는 CARRY로 닫는다]\n"
+                 + ("".join(f"{i} ({s}, 라운드 {k})\n" for i, (s, k) in sorted(open_.items())) or "없음\n")) if n > 1 else ""
     payload = (read(PROMPT).replace("{ROUND}", str(n)) + "\n[MR 본문]\n" + contract
                + "\n[완료 조건 번호 — CHECKED: <번호> — <근거>]\n" + (numbered(conds) or "없음\n") + design_system(old, cur)
-               + "\n[직전 라운드 지적]\n" + (prev or "없음")
+               + ledger_in + "\n[직전 라운드 지적]\n" + (prev or "없음")
                + "\n[코드 테스트 결과]\n" + (read(a.tests) if a.tests and os.path.exists(a.tests) else "없음")
                + "\n[diff]\n" + diff)
     out = os.path.join(D, f"r{n}.txt")
@@ -294,6 +317,17 @@ def main():
     if bad:
         invalidate(out)
         sys.exit(f"[review] {bad} — 모순된 응답이라 무효, 판정을 적지 않습니다 ({out}.failed). 같은 라운드를 다시 돌립니다.")
+    bad = mr_check.resolved_problems(text)
+    if bad:
+        invalidate(out)
+        sys.exit(f"[review] {bad[0]} — 형식이 어긋난 응답이라 무효, 판정을 적지 않습니다 ({out}.failed). "
+                 "같은 라운드를 다시 돌립니다.")
+    if n > 1 and v.group(1) == "CONFIRM":
+        bad = ledger_problems(text, prev_rounds)
+        if bad:
+            invalidate(out)
+            sys.exit(f"[review] VERDICT: CONFIRM인데 앞 라운드의 열린 지적이 닫히지 않음 — 무효, 판정을 적지 않습니다 "
+                     f"({out}.failed).\n" + "\n".join(f" - {c}" for c in bad) + f"\n→ 같은 라운드 {n}을 다시 돌립니다.")
     if n == 1:
         bad = checked_problems(text, conds)
         if bad:
@@ -303,7 +337,7 @@ def main():
                      + "\n→ 같은 라운드 1을 다시 돌립니다.")
     with open(os.path.join(D, f"r{n}.tree"), "w", encoding="utf-8") as f:
         f.write(f"{cur}\n" + mr_check.record_stamp(goal, vf_git.config())
-                + f"conds: {mr_check.completion_hash(mr)}\n")   # 리뷰 뒤 완료 조건이 바뀌면 qa·merge가 막는다
+                + f"conds: {mr_check.completion_hash(mr)}\ncontract: {mr_check.contract_hash(mr)}\n")   # 리뷰 뒤 완료 조건이 바뀌면 qa·merge가 막는다
     fs = findings(text)
     checked = len(re.findall(r"^CHECKED:\s*\S", text, re.M))
     count = {}

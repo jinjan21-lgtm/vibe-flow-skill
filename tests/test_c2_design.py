@@ -212,10 +212,11 @@ class UncheckedConditionMergeTest(C2):
     def test_merge_blocked_by_unchecked_condition(self):
         self.write("app.py", "def search(q):\n    return q\n")
         import vf_git
-        qa = f"- 대상 tree: {vf_git.snapshot()}\n- 코드: 통과\n- 브라우저: 해당 없음 — 서버 함수만, 화면 없음"
-        seed_review()
+        qa = f"- 대상 tree: {vf_git.snapshot()}\n- 코드: 통과\n- 브라우저: 해당 없음 — 서버 함수만, 화면 없음\n- 미검증·생략 항목과 사유: 없음"
         seed_qa_run(qa)
         self.mr(review="- 라운드 1: x\n- 판정: 확정", qa=qa, conds="- [x] 부분 일치 검색\n- [ ] 0건이면 안내 문구")
+        with open("mr.md", encoding="utf-8") as f:
+            seed_review(mr=f.read())   # 기록의 conds는 이 MR의 완료 조건(2개) 해시
         r = self.stage("merge")
         self.assertEqual(r.returncode, 1)
         self.assertIn("완료 조건 미체크 1개", r.stdout)
@@ -330,11 +331,12 @@ class EveryConditionCheckedTest(C2):
     def test_bullet_without_checkbox_blocks_merge(self):
         self.write("app.py", "def search(q):\n    return q\n")
         import vf_git
-        qa = f"- 대상 tree: {vf_git.snapshot()}\n- 코드: 통과\n- 브라우저: 해당 없음 — 서버 함수만, 화면 없음"
+        qa = f"- 대상 tree: {vf_git.snapshot()}\n- 코드: 통과\n- 브라우저: 해당 없음 — 서버 함수만, 화면 없음\n- 미검증·생략 항목과 사유: 없음"
         rv = "- 라운드 1: x\n- 판정: 확정"
-        seed_review()
         seed_qa_run(qa)
         self.mr(review=rv, qa=qa, conds="- [x] 부분 일치 검색\n- 0건이면 안내 문구")
+        with open("mr.md", encoding="utf-8") as f:
+            seed_review(mr=f.read())   # 기록의 conds는 이 MR의 완료 조건(2개) 해시
         r = self.stage("merge")
         self.assertEqual(r.returncode, 1)
         self.assertIn("완료 조건 미체크 1개", r.stdout)
@@ -429,7 +431,7 @@ class RecordFileOnlyTest(C2):
         import mr_check
         import vf_git
         cfg = vf_git.config()
-        qa = f"- 대상 tree: {vf_git.snapshot()}\n- 코드: 통과\n- 브라우저: 해당 없음 — 화면 없음\n"
+        qa = f"- 대상 tree: {vf_git.snapshot()}\n- 코드: 통과\n- 브라우저: 해당 없음 — 화면 없음\n- 미검증·생략 항목과 사유: 없음\n"
         self.write("docs/WORKLOG.md", "# 작업 이력\n- 기록\n")
         self.assertFalse([x for x in mr_check.merge_checks(qa, cfg) if "재검증" in x])
         self.write("docs/tool.py", "x = 1\n")
@@ -468,7 +470,10 @@ class DesignRecordTest(C2):
         seed_design(n=2, verdict="CHANGES")                          # 최근 회차가 기준
         self.assertEqual(self.stage("build").returncode, 1)
 
-    def test_human_verdict_and_skip_need_no_record(self):
+    def test_human_verdict_after_two_checks_and_skip_need_no_confirm(self):
+        """사람 판정은 설계 확인 2회(d1·d2 CHANGES) 뒤의 결정 D-nnn으로, 생략은 기록 없이 통과."""
+        seed_design(n=1, verdict="CHANGES")
+        seed_design(n=2, verdict="CHANGES")
         self.write("docs/DECISIONS.md", "## D-003 캐시 생략\n- 영향: G-001\n")   # 사람 판정은 결정 기록과 대조(J-09)
         self.mr(confirm="- 확인 1: blocker 1\n- 확인 2: blocker 1\n- 사람 결정: D-003 — 캐시 생략\n"
                         "- 판정: 확정 (사람 판정 D-003)")
@@ -544,7 +549,7 @@ class ChangeAfterReviewTest(C2):
         rv = "- 라운드 1 (전체): blocker 0 · 검토 근거 1/1\n- 판정: 확정"
         self.mr(confirm=conf, review=rv)
         self.assertEqual(self.stage("qa").returncode, 0, self.stage("qa").stdout)
-        self.mr(confirm=conf, review=rv, qa="- 브라우저: 해당 없음 — 서버 함수만, 화면 없음\n")
+        self.mr(confirm=conf, review=rv, qa="- 브라우저: 해당 없음 — 서버 함수만, 화면 없음\n- 미검증·생략 항목과 사유: 없음\n")
         r = self.run_script("qa_run.py", "--mr", "mr.md")                     # QA는 리뷰 뒤, 실제 실행 기록
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.write("docs/WORKLOG.md", "# 작업 이력\n- G-001 검색\n")          # QA 뒤 기록만
@@ -688,7 +693,8 @@ class AuditJTest(C2):
         self.assertTrue(any("QA 검증기(qa_run) 없음" in x for x in miss), miss)
 
     def test_j09_human_verdict_needs_decision_for_goal(self):
-        self.mr(confirm="- 확인 2: blocker 1\n- 판정: 확정 (사람 판정 D-009)")
+        seed_design(n=2, verdict="CHANGES")   # R5: Codex 설계 확인을 돌렸으면 사람 판정은 2회차 뒤에만
+        self.mr(confirm="- 확인 2: blocker 1\n- 사람 결정: D-009 — 없음\n- 판정: 확정 (사람 판정 D-009)")
         r = self.stage("build")
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("D-009", r.stdout)
@@ -746,6 +752,10 @@ class AuditJTest(C2):
         import contextlib
         import io
         self.mr()
+        os.makedirs("docs/mr", exist_ok=True)
+        shutil.copy("mr.md", "docs/mr/G-001.md")
+        sh("git", "add", "docs/mr/G-001.md", cwd=self.d)   # R5(H-04): DONE은 커밋된 MR 사본과 계약이 같을 때만
+        sh("git", "commit", "-qm", "G-001 기록", cwd=self.d)
         old = (self.mc.next_stage, self.mc.record_check, sys.argv)
         self.mc.next_stage = lambda text, cfg: ("record", "vibe-record", [])
         try:

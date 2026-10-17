@@ -9,7 +9,7 @@
 
 ## 1단계 — 코드
 
-1. 기존 자동 테스트를 전부 `python $S/qa_run.py --mr .vibe/mr-G-###.md`로 돌린다(`.vibe-flow.json`의 `test_cmd`). 손으로 따로 돌리지 않는다. 이 스크립트가 지금 작업물 tree를 잡고 exit·시간·출력 마지막 200줄을 `.vibe/qa/<tree>.json`에 남긴 뒤 「QA 결과」의 `대상 tree`·`코드` 줄을 채운다(`--mr` 없이 돌리면 출력된 두 줄을 붙인다). 종료코드는 테스트 결과를 따르고, `test_cmd`가 없으면 exit 2 `미검증`이다. merge 검사는 `코드: 통과`를 이 기록과 대조한다. 기록이 없거나 exit≠0이거나 tree가 다르거나 기록의 `cmd`가 지금 `test_cmd`와 다르면(테스트 명령이 바뀜) 막는다. 통과/전체 수는 출력에서 읽어 덧붙인다. 자동 테스트가 없는 레포(빌드 없는 프로토타입 등)는 최소한 `python $S/syntax_check.py <폴더>`(node --check, 검사할 파일이 0개면 exit 2 미검증)를 `test_cmd`로 두고, 동작 검증은 브라우저 단계가 맡는다.
+1. 기존 자동 테스트를 전부 `python $S/qa_run.py --mr .vibe/mr-G-###.md`로 돌린다(`.vibe-flow.json`의 `test_cmd`). 손으로 따로 돌리지 않는다. 이 스크립트가 지금 작업물 tree를 잡고 exit·시간·출력 마지막 200줄을 `.vibe/qa/<tree>.json`에 남긴 뒤 「QA 결과」의 `대상 tree`·`코드` 줄을 채운다(`--mr` 없이 돌리면 출력된 두 줄을 붙인다). 종료코드는 테스트 결과를 따르고, `test_cmd`가 없으면 exit 2 `미검증`이다. QA 대상은 `qa_run.py`가 쓴 tree다 — commit sha를 손으로 쓰지 않는다(뒤에 기록을 amend하면 sha가 바뀐다). 출력이 verbose(`-v`)면 테스트별 결과가 기록 `tests`에 남는다. merge 검사는 `코드: 통과`를 이 기록과 대조한다. 기록이 없거나 exit≠0이거나 tree가 다르거나 기록의 `cmd`가 지금 `test_cmd`와 다르면(테스트 명령이 바뀜) 막는다. 통과/전체 수는 출력에서 읽는다(unittest `Ran N tests`+OK/FAILED, pytest `N passed, M failed`, jest·vitest `Tests: N passed`) — 기록에 `passed`·`total`·`skipped`, 코드 줄에 `N/M 통과(K 건너뜀)`. 건너뛴 테스트는 통과가 아니다(전체에는 센다). 코드 줄에 쓴 `N/M`이 기록과 다르면 merge가 막는다. 출력에서 못 읽으면 수를 손으로 쓰지 않는다. 자동 테스트가 없는 레포(빌드 없는 프로토타입 등)는 최소한 `python $S/syntax_check.py <폴더>`(node --check, 검사할 파일이 0개면 exit 2 미검증)를 `test_cmd`로 두고, 동작 검증은 브라우저 단계가 맡는다.
 2. 완료 조건마다 만든 테스트가 그 안에 있는지 확인한다. 없는 완료 조건이 있으면 테스트를 추가하고 다시 돌린다. 확인된 완료 조건은 MR 「완료 조건」에서 `[x]`로 바꾼다(미체크가 남으면 merge 검사가 막는다).
 3. 실패한 테스트는 `qa_run.py`로 2회까지 다시 돌린다. 그래도 실패하면 `코드: 실패`다. 불안정한 테스트라고 판단해도 통과로 적지 않는다.
 
@@ -28,12 +28,12 @@ UI 파일 여부는 `mr_check.py`와 같은 기준(`ui_globs`)으로 정한다. 
 
 ## 결과 등록
 
-MR 본문(작업 중 `.vibe/mr-G-###.md`)의 「QA 결과」를 채우고, MR 댓글에도 같은 내용을 남긴다. 기록 전에 `python $S/handoff.py export-evidence G-###`이 이 본문을 `<핸드오프>/mr/G-###.md`로, 「QA 결과」 대상 tree의 `.vibe/qa/<tree>.json`을 `G-###-qa.json`으로, 이 골의 `.vibe/review/d*.txt`·`r*.txt` 원문을 `G-###-review.md`로 쓴다(vibe-record). `check-record`는 qa 사본의 tree·cmd·exit 0과 tree가 MR 대상과 같은지, review 사본에 `VERDICT:` 줄이 있는지 본다. 원격 MR이 없는 레포에서도 커밋만으로 검증과 테스트 출력을 볼 수 있다. 증거 캡처가 `.vibe/`에 있으면 사본의 링크는 추적되지 않는 파일을 가리킨다는 것을 「미검증·생략 항목과 사유」 옆에 밝힌다.
+MR 본문(작업 중 `.vibe/mr-G-###.md`)의 「QA 결과」를 채우고, MR 댓글에도 같은 내용을 남긴다. 기록 전에 `python $S/handoff.py export-evidence G-###`이 이 본문을 `<핸드오프>/mr/G-###.md`로, 「QA 결과」 대상 tree의 `.vibe/qa/<tree>.json`을 `G-###-qa.json`으로, `.vibe/review/d*.txt`·`r*.txt` 원문 중 기록 도장(goal·branch·base)이 이 MR 「골」·지금 브랜치·지금 기준과 같은 회차만 `G-###-review.md`로 쓴다(vibe-record). 「골」에 골이 여럿이면 골마다 세 사본을 쓴다. 대상 sha는 안내 주석(`<!-- … -->`) 밖의 줄만 읽는다. `check-record`는 qa 사본의 tree·cmd·exit 0, cmd가 그 커밋 `.vibe-flow.json`의 `test_cmd`와 같은지, tree가 MR 대상과 같은지, review 사본에 `VERDICT:` 줄이 있는지 본다. 원격 MR이 없는 레포에서도 커밋만으로 검증과 테스트 출력을 볼 수 있다 — 새 clone에서 `handoff.py verify-evidence G-###`이 커밋된 파일만으로 다시 검사한다. amend 전 QA tree 객체는 clone되지 않으므로 qa_run이 남긴 `code_tree`(QA tree에서 기록 파일을 뺀 tree)를 커밋에서 같은 방법으로 만든 코드 tree와 비교한다(`code_tree` 없는 예전 기록은 기록 파일을 부모 판으로 되돌려 재구성). 기록 판정의 PLAN 링크도 커밋의 PLAN.md로 본다. 리뷰 원문은 `## rN.txt` 회차만 코드 리뷰로 센다(dN은 아님) — 전 회차 지적 장부(열린 blocker·major)를 다시 계산하고, export-evidence가 회차 제목 밑에 넣은 도장(`<!-- stamp … -->`: tree·goal·branch·base·conds·contract)으로 판정 회차의 완료 조건·계약 해시가 커밋된 MR과 같은지, 그 회차가 본 tree의 코드가 QA 코드와 같은지 본다. 완료 조건 빈 항목, MR 「골」에 없는 골 ID도 실패다. 사람 판정은 유효 r3, 커밋된 결정 블록, `- 사람 결정: D-nnn — <ID들> (tree <r3 sha>)` 줄이 모두 있어야 한다. 커밋된 `.vibe-flow.json`에 `test_cmd`가 없으면 check-record도 실패다. 테스트가 전부 건너뛰어졌으면 qa_run은 `코드: 실패(전부 건너뜀)`로 쓰고 0이 아닌 코드로 끝난다. 캡처는 로컬 어디에 두어도 된다(`.vibe/qa/`는 추적 안 됨) — export-evidence가 「QA 결과」의 로컬 이미지·영상을 `<핸드오프>/mr/G-###-evidence/<이름>`으로 복사하고 사본의 링크를 그 상대 경로로 바꾼다. `브라우저: 통과`면 verify-evidence가 사본의 캡처 링크가 하나 이상이고 모두 커밋에 있는지 본다(없으면 `캡처 증거 없음(새 clone)`). QA 기록은 `ok`(exit 0, 전부 건너뜀 아님)여야 하고, 판정 회차 도장 `goal`에 그 골이 있어야 하며, 사람 판정은 r1·r2·r3가 모두 있어야 한다. `qa_run --red`는 출력에서 실패한 테스트를 찾아야 RED다(실행 오류는 아님).
 
 ```
 - 대상 tree: 9c2e…(qa_run.py가 채움)
 - 환경: https://dev.example.com / 계정 역할: 일반 영업
-- 코드: 통과 — npm test exit 0, 190.2s (기록 .vibe/qa/9c2e….json) · 412/412
+- 코드: 통과 — 412/412 통과, npm test exit 0, 190.2s (기록 .vibe/qa/9c2e….json)
 - 브라우저: 통과 — 거래처 부분 검색 ✅, 0건 안내 ✅, 청구서 목록 검색(공유 부품) ✅
 - 증거: ![A1](.vibe/qa/G-012/A1.png) ![A2](.vibe/qa/G-012/A2.png)
 - 미검증·생략 항목과 사유: 없음

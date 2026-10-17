@@ -37,6 +37,7 @@ G-001 시험 골
 - 테스트 계획: 부분 일치 테스트 먼저
 ## 설계 확인
 - 확인 1: blocker 0
+- 사람 결정: D-001 — 없음
 - 판정: 확정 (사람 판정 D-001)
 ## 계획 vs 실제
 {plan}
@@ -56,21 +57,24 @@ def _vibe_record(name, text):
         f.write(text)
 
 
-def seed_review(goal="G-001", n=1, verdict="CONFIRM", extra=""):
+def seed_review(goal="G-001", n=1, verdict="CONFIRM", extra="", mr=None):
     """지금 작업물·브랜치·기준의 리뷰 라운드 기록(r<N>.txt·r<N>.tree). mr_check는 「리뷰 기록」의 '판정: 확정'을
-    이 기록과 대조한다 — MR 문구만으로는 확정이 아니다."""
+    이 기록과 대조한다 — MR 문구만으로는 확정이 아니다. conds는 mr(기본 MR_OK)의 완료 조건 해시(review.py와 같이)."""
     import mr_check
     import vf_git
     _vibe_record(f"r{n}.txt", f"ROUND: {n}\n{extra}VERDICT: {verdict}\n")
-    _vibe_record(f"r{n}.tree", vf_git.snapshot() + "\n" + mr_check.record_stamp(goal, vf_git.config()))
+    _vibe_record(f"r{n}.tree", vf_git.snapshot() + "\n" + mr_check.record_stamp(goal, vf_git.config())
+                 + f"conds: {mr_check.completion_hash(MR_OK if mr is None else mr)}\n"
+                 + f"contract: {mr_check.contract_hash(MR_OK if mr is None else mr)}\n")
 
 
-def seed_design(goal="G-001", n=1, verdict="CONFIRM", extra=""):
+def seed_design(goal="G-001", n=1, verdict="CONFIRM", extra="", mr=None):
     """지금 브랜치·기준의 설계 확인 기록(d<N>.txt·d<N>.meta). 「설계 확인」 '판정: 확정'은 이 기록과 대조된다."""
     import mr_check
     import vf_git
     _vibe_record(f"d{n}.txt", f"{extra}VERDICT: {verdict}\n")
-    _vibe_record(f"d{n}.meta", mr_check.record_stamp(goal, vf_git.config()) + "diverged: no\n")
+    _vibe_record(f"d{n}.meta", mr_check.record_stamp(goal, vf_git.config()) + "diverged: no\n"
+                 + f"design: {mr_check.design_hash(MR_OK if mr is None else mr)}\n")
 
 
 def seed_qa_run(body):
@@ -78,8 +82,9 @@ def seed_qa_run(body):
     '코드: 통과'면 .vibe/qa/<tree>.json(exit 0), '브라우저'의 캡처 링크면 그 파일. 캡처 파일은 스냅숏에서 뺀다."""
     import json
     import vf_git
-    m = re.search(r"대상 (?:commit|tree):\s*`?([0-9a-f]{7,40})", body)
-    tree = vf_git.tree_of(m.group(1)) if m else ""
+    import qa_run
+    sha = qa_run.target(body)   # 주석 안 예시 sha는 대상이 아니다(mr_check·qa_run과 같은 파서)
+    tree = vf_git.tree_of(sha) if sha else ""
     if tree and re.search(r"^-\s*코드:\s*통과(?=$|[\s(（—–])", body, re.M):
         with open(os.path.join(".git", "info", "exclude"), "a", encoding="utf-8") as f:
             f.write("\n.vibe/\n")
@@ -225,6 +230,7 @@ class MrCheckTest(Repo):
     def check(self, body, stage):
         self.write("mr.md", body)
         seed_review()   # 리뷰 확정은 .vibe/review 기록과 대조된다 — 지금 작업물을 리뷰가 확정한 것으로 둔다
+        seed_design(n=1, verdict="CHANGES"); seed_design(n=2, verdict="CHANGES")   # MR_OK의 사람 판정은 설계 확인 2회 뒤에만
         seed_qa_run(body)   # QA 통과 주장은 실행 기록(qa_run)과 대조된다
         return self.run_script("mr_check.py", "mr.md", "--stage", stage)
 
@@ -254,7 +260,7 @@ class MrCheckTest(Repo):
         self.assertEqual(self.check(self.body(plan="같음", review=four), "qa").returncode, 1)
 
     def qa_body(self, target, browser="해당 없음(UI 변경 없음)", extra=""):
-        qa = f"- 대상 tree: {target}\n- 코드: 통과 — 3/3\n- 브라우저: {browser}\n{extra}"
+        qa = f"- 대상 tree: {target}\n- 코드: 통과 — 3/3\n- 브라우저: {browser}\n- 미검증·생략 항목과 사유: 없음\n{extra}"
         return self.body(plan="같음", review="- 라운드 1: x\n- 판정: 확정", qa=qa)
 
     def test_merge_passes_when_qa_matches_worktree(self):
@@ -599,7 +605,7 @@ class TeamHandoffTest(unittest.TestCase):
             "docs/handoff/WORKLOG/proto.md": "# proto\n",
             "docs/handoff/NORTHSTAR.md": "# 노스스타\n<!-- status: confirmed -->\n## 목적\n영업팀이 거래처를 찾는다\n",
             "docs/handoff/goals/G-001-search.md": GOAL.format(gid="G-001", st="active"),
-            ".vibe-flow.json": '{"base": "main", "branch_prefixes": ["proto", "chore"]}',
+            ".vibe-flow.json": '{"base": "main", "branch_prefixes": ["proto", "chore"], "test_cmd": "t"}',
             ".gitattributes": "docs/handoff/REMAINING.md merge=union\ndocs/handoff/WORKLOG/INDEX.md merge=union\n",
             "app.js": "// app\n",
         }
@@ -1176,13 +1182,14 @@ class FlexibilityTest(Repo):
     def check(self, body, stage):
         self.write("mr.md", body)
         seed_review()   # 리뷰 확정은 .vibe/review 기록과 대조된다
+        seed_design(n=1, verdict="CHANGES"); seed_design(n=2, verdict="CHANGES")   # MR_OK의 사람 판정은 설계 확인 2회 뒤에만
         seed_qa_run(body)
         return self.run_script("mr_check.py", "mr.md", "--stage", stage)
 
     def qa(self, browser):
         target = self.vf.snapshot()
         return MR_OK.format(plan="같음", review="- 라운드 1: x\n- 판정: 확정",
-                            qa=f"- 대상 tree: {target}\n- 코드: 통과\n- 브라우저: {browser}\n")
+                            qa=f"- 대상 tree: {target}\n- 코드: 통과\n- 브라우저: {browser}\n- 미검증·생략 항목과 사유: 없음\n")
 
     def test_code_outside_ui_globs_needs_a_reason_not_silent_pass(self):
         self.write("lib/format.js", "export const f = 1\n")              # 글롭에 안 걸리는 화면 코드일 수도 있음
@@ -1210,9 +1217,10 @@ class FlexibilityTest(Repo):
 
     def test_next_names_the_stage_and_sub_skill(self):
         self.write("mr.md", MR_OK.format(plan="(진행 전)", review="(진행 전)", qa="(진행 전)"))
+        seed_design(n=1, verdict="CHANGES"); seed_design(n=2, verdict="CHANGES")   # MR_OK의 사람 판정은 설계 확인 2회 뒤에만
         r = self.run_script("mr_check.py", "mr.md", "--next")
         self.assertIn("review → 세부 스킬 vibe-dev", r.stdout)            # 설계 확정, 계획 vs 실제 없음 → 구현 중
-        no_design = MR_OK.replace("- 확인 1: blocker 0\n- 판정: 확정 (사람 판정 D-001)\n", "")
+        no_design = MR_OK.replace("- 확인 1: blocker 0\n- 사람 결정: D-001 — 없음\n- 판정: 확정 (사람 판정 D-001)\n", "")
         self.write("mr.md", no_design.format(plan="같음", review="(진행 전)", qa="(진행 전)"))
         r = self.run_script("mr_check.py", "mr.md", "--next")
         self.assertIn("build → 세부 스킬 vibe-design", r.stdout)         # "리뷰만"이라도 설계 확인부터

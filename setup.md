@@ -34,6 +34,10 @@ EOF
 
 team-handoff `SKILL.md`, `CLAUDE.md`, `AGENTS.md`에는 골 ID 표기와 `handoff.py precheck/claim/check-record` 호출 지점을 넣는다 — 형식은 structure.md의 표 그대로.
 
+설치 확인: `python $S/scripts/handoff.py precheck --run-tests` — 마지막에 착수 가능성(git·python·codex PATH, `test_cmd`, 기준 테스트 결과)이 나온다. Codex는 면제 없이 필수(골 판정·설계 확인·리뷰), 추적 파일에 커밋 안 된 변경이 있어도 착수 불가다. `착수 불가`면 그 항목부터 고친다.
+
+제3자 재검증(리뷰어·감사): 원격에서 새로 `git clone`한 뒤 `python <vibe-flow>/scripts/handoff.py verify-evidence G-### [--commit <기록 커밋>]`. `.vibe/` 없이 커밋된 MR 사본·리뷰 원문·QA 기록만으로 PASS/FAIL을 낸다(QA 기록 cmd = 커밋된 `test_cmd`, QA tree 뒤 코드 변경 없음 포함).
+
 ## UI가 있는 레포
 
 ```bash
@@ -60,7 +64,7 @@ cp $S/templates/design-system.md docs/
 | `branch_prefixes` | 없음 | 팀 레포 브랜치 접두사 규칙 (claim·mr_check가 검사) |
 | `handoff_dir` | 자동 (`docs/handoff` 또는 `docs`) | 핸드오프 폴더 |
 | `northstar` / `goals_dir` | `<핸드오프 폴더>/NORTHSTAR.md` / `<핸드오프 폴더>/goals` | 노스스타·골 위치 |
-| `test_cmd` | - | QA 코드 단계 명령 |
+| `test_cmd` | - | QA 코드 단계 명령. 없으면 `precheck`가 착수 불가(exit 1). verbose 출력 권장(`python -m unittest -v`, `pytest -v`) — 테스트별 결과가 QA 기록 `tests`에 남아 회귀를 대조한다 |
 | `dev_url` | - | QA 브라우저 단계 주소 |
 | `ui_globs` | tsx·jsx·vue·css·html·pages·routes·components | 브라우저 QA 필수·디자인시스템 참조 판정 |
 | `design_system` | `docs/design-system.md` | 디자인시스템 문서 |

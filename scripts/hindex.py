@@ -97,6 +97,8 @@ def links_of(text):
         t = m.group(1)
         if re.match(r"^(https?:|mailto:|#)", t) or "<" in t:
             continue
+        if not re.search(r"[./]", t.partition("#")[0]):   # `inv["discount"](합계)` 같은 문장 — 경로가 아니다
+            continue
         yield t
 
 

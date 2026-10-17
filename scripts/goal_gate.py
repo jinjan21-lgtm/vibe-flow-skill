@@ -423,6 +423,9 @@ if __name__ == "__main__":
     for s in (sys.stdout, sys.stderr):
         s.reconfigure(encoding="utf-8")
     a = sys.argv[1:]
+    if any(x in ("-h", "--help") for x in a):   # 도움말 요청이 후보 제목·골 ID로 들어가지 않게
+        print(__doc__)
+        sys.exit(0)
     if a[:1] == ["install-hook"]:
         install_hook()
     elif a[:1] == ["check-commit"] and len(a) == 2:

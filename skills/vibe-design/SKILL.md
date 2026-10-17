@@ -14,13 +14,13 @@ description: Use when a goal is claimed and the approach is not yet confirmed �
 ## 순서
 
 1. **찾아 읽기** — 진입 인덱스에서 필요한 것만:
-   - 결정: `grep "#<화면 ID 또는 코드 이름>" docs/handoff/DECISIONS.md`(예: `#HOME-01`, `#core.js`) → 유효한 줄(대체됨 아님)의 본문만 연다. `대체 D-kkk`가 있는 줄이 있으면 D-kkk는 쓰지 않는다. 태그가 없는 주제는 INDEX 제목을 `grep -n "<키워드>"`, 그래도 없으면 본문 파일을 `grep -n`해 걸린 블록만.
+   - 결정: `grep "#<화면 ID 또는 코드 이름>" docs/handoff/DECISIONS.md`(예: `#HOME-01`, `#core.js`) → 유효한 줄(대체됨 아님)의 본문만 연다(대체된 D-kkk는 쓰지 않는다). 태그가 없으면 INDEX 제목, 그다음 본문 파일을 `grep -n`해 걸린 블록만.
    - 작업 기록: WORKLOG INDEX에서 같은 골·토픽 줄의 앵커만.
    - UI가 닿으면 `docs/design-system.md`.
 2. 선점 브랜치에서 코드를 읽는다. 탐색 결과물(임시 코드)은 버린다.
 3. MR 본문 「설계」 다섯 칸: 접근 방식 · 바꿀 모듈·파일 · 데이터·API 변경 · 대안과 선택 이유 · 테스트 계획. 개발 유형과 영향 표식(UI·API·데이터·의존성)은 vibe-flow `docs/task-types.md`로 정한다. `--stage draft`.
-4. 설계 확인: `python $S/review.py --design 1 --mr <mr>` → 「설계 확인」에 `- 확인 1: …`, `- 판정: 확정`. blocker가 남으면 `--design 2`. 2회 뒤에도 blocker면 `판정: 보류`, 사용자에게(결정 대기는 REMAINING `- [ ] 결정: …`). 사용자가 결정하면 D-nnn(블록에 골 ID)으로 기록하고 `- 판정: 확정 (사람 판정 D-nnn)` — 3회차는 없고, 바뀐 설계는 「계획 vs 실제」로 리뷰에 넘긴다(`review-loop.md`).
-5. 작은 변경(기본 50줄·3파일, 기록 제외)은 **코딩 전에** `- 생략: 작은 변경 (예상 N줄·M파일)`(N·M이 기준 초과면 막힘). `- 위험:`·데이터·API 변경이 `없음`이 아니면 생략 불가. 생략 중엔 `--stage build`가 코드 크기도 본다 — 넘으면 멈추고 4번. 구현 뒤 확인이면 `- 순서: 구현 선행 (사유)`.
+4. 설계 확인: `python $S/review.py --design 1 --mr <mr>` → 「설계 확인」에 `- 확인 1: …`, `- 판정: 확정`. blocker가 남으면 `--design 2`. 2회 뒤에도 blocker면 `판정: 보류`, 사용자에게(REMAINING `- [ ] 결정: …`). 사용자가 결정하면 D-nnn(골 ID·blocker ID)으로 기록하고 `- 사람 결정: D-nnn — <blocker ID>`, `- 판정: 확정 (사람 판정 D-nnn)` — 3회차는 없다. 바뀐 설계는 「계획 vs 실제」로(`review-loop.md`).
+5. 작은 변경(기본 50줄·3파일, 기록 제외)은 **코딩 전에** `- 생략: 작은 변경 (예상 N줄·M파일)`(N·M이 기준 초과면 막힘). `- 위험:`·데이터·API 변경이 정확히 `없음`이 아니면 생략 불가(`없음(…)`도 위험). 강화 프로필은 「검증 계획」에 회귀 테스트 이름(`docs/task-types.md`). 생략 중엔 `--stage build`가 코드 크기도 본다 — 넘으면 멈추고 4번. 구현 뒤 확인이면 `- 순서: 구현 선행 (사유)`.
 6. `python $S/mr_check.py <mr> --stage build` 통과 → 다음은 **vibe-dev**.
 
 ## Red Flags
