@@ -674,16 +674,24 @@ def test_ids(value):
     """'- 코드:'·'- 회귀:'·CHECKED 값의 테스트 식별자(test_x · Class.test_x · path/test_x.py::name · tests/…py ·
     JS '파일 › 묶음 › 이름'·'파일 > 묶음 > 이름')."""
     js, rest = [], []
-    for seg in re.split(r"[;\n]", value or ""):
-        m = JS_TEST_START.search(seg)
-        if not m:
-            rest.append(seg)
+    for line in (value or "").split("\n"):
+        starts = [m.start() for m in JS_TEST_START.finditer(line)]
+        if not starts:
+            rest.append(line)
             continue
-        tail = seg[m.start():]
-        ref = JS_TRAIL_REF.search(tail)
-        js.append((tail[:ref.start()] if ref else tail).strip())
-        rest.append(seg[:m.start()] + (ref.group(0) if ref else ""))
-    return js + TEST_ID.findall(" ; ".join(rest))
+        rest.append(line[:starts[0]])
+        # JS 이름에는 ';'·','·괄호가 들어갈 수 있다(A14 — A13-02 잔여): 한 식별자는 다음 JS 식별자 시작 전까지(그 사이 구분자만 뗌),
+        # 줄의 마지막 식별자는 줄 끝까지에서 끝의 '(파일:줄)' 하나만 뗀다
+        for i, a in enumerate(starts):
+            seg = line[a:starts[i + 1]] if i + 1 < len(starts) else line[a:]
+            if i + 1 < len(starts):
+                seg = re.sub(r"[\s,;]+$", "", seg)
+            ref = JS_TRAIL_REF.search(seg)
+            js.append((seg[:ref.start()] if ref else seg).strip())
+            if ref:
+                rest.append(ref.group(0))
+    # '파일:줄'(코드 위치)은 테스트 이름이 아니다 — 'test_x (tests/test_a.py:62)'의 경로를 이름으로 뽑지 않는다(E2E S1-E1)
+    return js + TEST_ID.findall(CODE_REF.sub(" ", " ; ".join(rest)))
 
 
 def _test_files():
@@ -839,20 +847,24 @@ def checked_complete_problems(goal, cfg, text, extra_closed=()):
     return bad
 
 
-def human_closed_ids(text):
-    """「리뷰 기록」이 사람 판정이면 그 결정 줄('- 사람 결정: D-nnn — <ID들>')의 지적 ID, 아니면 빈 집합.
+def human_closed_ids(text, cfg=None):
+    """「리뷰 기록」이 사람 판정이면 그 결정 줄('- 사람 결정: D-nnn — <ID들>')의 지적 ID 중 **결정 블록(DECISIONS '## D-nnn')에도
+    적힌 것**, 아니면 빈 집합 — MR 문구만으로 사람이 다루지 않은 지적을 닫지 못한다(A14-01, 심각도 무관).
     완료 조건의 최종 근거는 이 ID로만 갈린다 — checked_complete_problems·checked_tests가 같은 값을 쓴다(A13-01)."""
     rv = sections(text or "").get("리뷰 기록", "")
     h = HUMAN_REVIEW.search(rv)
     if not h:
         return set()
     dl = re.search(rf"^\s*-\s*사람 결정:\s*{h.group(1)}(?!\d)\s*[—–-]+\s*(\S.*)$", rv, re.M)
-    return set(FID.findall(dl.group(1))) if dl else set()
+    if not dl:
+        return set()
+    blk = decision_block(h.group(1), cfg or vf_git.config())[1] or ""
+    return {i for i in FID.findall(dl.group(1)) if has_fid(i, blk)}
 
 
 def checked_tests(goal, cfg, text=None):
     """완료 조건마다 최종 리뷰 근거(checked_map — 사람 판정이면 결정 ID 포함)의 테스트 이름 {조건 번호: [이름…]}."""
-    return {k: test_ids(ev) for k, ev in checked_map(goal, cfg, human_closed_ids(text))[1].items()}
+    return {k: test_ids(ev) for k, ev in checked_map(goal, cfg, human_closed_ids(text, cfg))[1].items()}
 
 
 def checked_run_problems(goal, cfg, qa, text=None):
@@ -903,7 +915,7 @@ def test_match(rid, recorded):
 #   ACCEPTED-RISK  미검증 항목의 배포 위험을 사용자가 인수(D-nnn). 상태로만 남고 게이트는 열리지 않는다 — 머지는 사용자가 직접 우회
 #   POLICY-PENDING 정책 미결(「영향·위험」 '- 미확인:'이 정책 결정·해소로 닫히지 않음). 위험 인수로는 닫히지 않는다 — 차단
 STATES = ("UNVERIFIED", "ACCEPTED-RISK", "POLICY-PENDING")
-ITEM_SPLIT = r"[,;，、]"
+ITEM_SPLIT = r"[;；]"   # 항목 구분은 ';' — 자연어 항목 속 쉼표로 한 항목이 둘로 갈리지 않게(E2E S1 t4w1)
 
 
 def _items(val):
@@ -1124,7 +1136,7 @@ def human_review(did, goal, cfg, text):
     miss += [f"r{n}: {p} — 리뷰 재실행" for n, t in rounds for p in resolved_problems(t)]
     miss += decision_cover(did, sections(text).get("리뷰 기록", ""), ledger(rounds, GATE_SEVS), cfg, "리뷰 기록")
     # 사람이 정한 지적 ID만 '미충족'을 닫는다 — 완료 조건마다 실재하는 근거는 그대로 필요(A11 — 사람 판정 경로도 같은 검사)
-    miss += checked_complete_problems(goal, cfg, text, extra_closed=human_closed_ids(text))
+    miss += checked_complete_problems(goal, cfg, text, extra_closed=human_closed_ids(text, cfg))
     old = record_fields(os.path.join(REVIEW_DIR, "r3.tree")).get("conds")
     if rounds and rounds[-1][0] == 3 and not old:
         miss.append("리뷰 기록에 완료 조건 해시 없음(r3.tree) — 리뷰 재실행")
