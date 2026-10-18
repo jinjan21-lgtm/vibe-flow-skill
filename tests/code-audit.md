@@ -341,3 +341,14 @@ E2E S6: 4건 모두 merge·`verify-evidence --run-tests` 통과(t4s2는 시뮬�
 | ID | 심각도 | 내용 | 처리 |
 |---|---|---|---|
 | A22-01 | major | RED 대체가 「테스트 파일 무변경 + 기존 테스트 ok」만 보아, 기존 테스트가 다루지 않는 기능 동작을 바꿔도 RED 없이 통과(재현: VIP 0원 분기 추가) | 바뀐 코드가 설정·의존성 파일(`CONFIG_FILE`)뿐일 때만 그대로. 그 밖의 코드가 바뀌면 사람 승인 `(승인 D-nnn)` — 결정 블록에 골 ID와 'RED 대체'. 테스트 `test_behavior_code_change_needs_approval`·`test_code_change_with_decision_ok`(수정 전 실패 확인) |
+
+**22차 전문 재확인·23차(S10 e14318a):** 22차 답은 major 3건이었다(먼저 읽은 A22-01 외에 A22-02·A22-03 — 응답이 끝나기 전에 읽어 놓쳤다). 23차: A22-01 부분 해소(JSON 설정 파일 하나로도 동작이 바뀜), 승인 결정이 시뮬레이션 검사 대상이 아님.
+
+| ID | 심각도 | 내용 | 처리(S11) |
+|---|---|---|---|
+| A22-01 잔여 | major | 설정 파일만 바뀌면 승인 없이 RED 대체 | RED 대체는 항상 사람 승인 `(승인 D-nnn)` — 결정 블록에 골 ID와 'RED 대체'. 설정·코드 구분 규칙(CONFIG_FILE) 삭제 |
+| A22-02 | major | 커밋된 `.vibe-flow.json` `"rehearsal": true`로 운영 레포의 시뮬레이션 결정이 merge·verify-evidence 통과 | 리허설은 실행 환경 `VF_REHEARSAL=1`만(설정 값은 무시), `verify-evidence`는 `--rehearsal` 명시 때만(남은 환경변수도 재연에 넘기지 않음) |
+| A22-03 | major | 지운 테스트 파일을 '바뀐 테스트'로 못 잡음 | `--name-status -M` 전체 경로 + 경로 모양(`is_test_path`) |
+| A23-01 | major | RED 대체 승인 `(승인 D-nnn)`이 시뮬레이션 결정 검사 대상이 아님 | `mr_decision_ids`에 포함 |
+
+테스트: tests/test_r6_audit22.py(수정 전 4건 실패 확인), test_r6_red_alt.py 갱신. 전체 527 통과.

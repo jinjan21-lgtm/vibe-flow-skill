@@ -45,6 +45,8 @@ def config():
     if os.path.exists(".vibe-flow.json"):
         with open(".vibe-flow.json", encoding="utf-8") as f:
             cfg.update(json.load(f))
+    # 리허설(시뮬레이션 결정 허용)은 커밋된 설정이 아니라 실행 환경에서만 온다(A22-02 — 운영 레포가 커밋으로 열지 못하게)
+    cfg["rehearsal"] = os.environ.get("VF_REHEARSAL") == "1"
     rp = os.environ.get("VF_REPLAY")
     if rp:   # handoff.py verify-evidence 재연 전용 — 기준을 판정 회차 도장의 조상 커밋으로(handoff.REPLAY_DIFF)
         cfg.update(json.loads(rp))

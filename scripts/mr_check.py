@@ -663,11 +663,11 @@ def check(text, stage, cfg):
                             "완료 조건을 확인하는 자동 테스트를 두고 test_cmd에 넣는다")
         for did in mr_decision_ids(text):
             if simulated_block(decision_block(did, cfg)[1] or ""):
-                if cfg.get("rehearsal") is True:   # 리허설 레포(E2E)만 — 운영 레포에서는 실제 결정자 확인 전 merge를 열지 않는다
-                    print(f"[state] SIMULATED-DECISION {did} — 리허설 레포의 시뮬레이션 결정(운영 승인 아님)")
+                if cfg.get("rehearsal") is True:   # 리허설 실행(환경변수 VF_REHEARSAL=1 — vf_git.config)만 통과
+                    print(f"[state] SIMULATED-DECISION {did} — 리허설 실행의 시뮬레이션 결정(운영 승인 아님)")
                 else:
                     miss.append(f"SIMULATED-DECISION {did} — 시뮬레이션 결정은 운영 승인이 아니다: 실제 결정자가 결정 블록을 "
-                                "다시 적기 전 merge 불가(리허설 레포만 .vibe-flow.json \"rehearsal\": true)")
+                                "다시 적기 전 merge 불가(리허설 실행만 환경변수 VF_REHEARSAL=1 — 커밋된 설정으로는 열리지 않음)")
         miss += schema_problems(goal, cfg, s.get("QA 결과", ""))
         if profile(s) == "강화":
             ids, bad_lines = regression_ids(s.get("QA 결과", ""))
@@ -695,7 +695,9 @@ def simulated_block(blk):
 def mr_decision_ids(text):
     """MR이 근거로 쓴 결정 ID(사람 결정·정책 결정·위험 인수 줄)."""
     t = re.sub(r"<!--.*?-->", "", text or "", flags=re.S)
-    return sorted(set(re.findall(r"^\s*[-*]?\s*(?:사람 결정|정책 결정|위험 인수|사람 승인)\s*:\s*(D-\d+)", t, re.M)))
+    ids = set(re.findall(r"^\s*[-*]?\s*(?:사람 결정|정책 결정|위험 인수|사람 승인)\s*:\s*(D-\d+)", t, re.M))
+    ids.update(re.findall(r"[(（]\s*승인\s*(D-\d+)\s*[)）]", t))   # RED 대체 승인(23차)도 시뮬레이션 검사 대상
+    return sorted(ids)
 
 
 # 위험 자기 분류 교차 확인(진단 평가 C6): '위험: 없음'이어도 바뀐 코드(추가된 줄)에 이런 식별자가 있으면 판단 근거를 적게 한다
@@ -1155,46 +1157,37 @@ def _strip_comments(t):
 
 
 def changed_test_files(cfg):
-    """기준 대비 지금 작업물에서 바뀐(추가 포함) 테스트 파일."""
+    """기준 대비 지금 작업물에서 바뀐 테스트 파일 — 추가·수정·삭제·이름 변경 모두(A22-03: 지운 파일은 지금 목록에 없으므로
+    경로 모양으로도 본다)."""
     base = vf_git.base_tree(cfg["base"])
-    names = vf_git.git("diff", "--name-only", base, vf_git.snapshot(), check=True).splitlines()
+    out = vf_git.git("diff", "--name-status", "-M", base, vf_git.snapshot(), check=True)
+    names = [p for line in out.splitlines() for p in line.split("\t")[1:] if p]
     tests = {os.path.normpath(p) for p in _test_files()}
-    return [f for f in names if f and os.path.normpath(f) in tests]
+    return sorted({f for f in names if os.path.normpath(f) in tests or is_test_path(f)})
 
 
-CONFIG_FILE = re.compile(r"(?i)(?:^|/)(?:[^/]+\.(?:json|toml|ini|cfg|ya?ml|lock|conf|env\.example)|requirements[^/]*\.txt|"
-                         r"Pipfile|Gemfile|go\.(?:mod|sum)|\.[^/]*rc|Dockerfile|Makefile|\.gitignore|\.gitattributes|"
-                         r"\.editorconfig|setup\.cfg)$")
-
-
-def changed_code_files(cfg):
-    """기준 대비 지금 작업물에서 바뀐 코드 파일(기록·.vibe·추적 산출물 제외 — code_diff)."""
-    return code_diff(vf_git.base_tree(cfg["base"]), vf_git.snapshot(), cfg)[0]
+def is_test_path(p):
+    """경로 모양만으로 테스트 파일인가(testids._test_files와 같은 기준 — 지운 파일 판별용)."""
+    p = p.replace("\\", "/")
+    f = p.rsplit("/", 1)[-1]
+    return bool(re.search(r"(^|/)tests?/", p) or f.startswith("test") or "_test" in f or JS_TEST_FILE.search(f))
 
 
 def red_alt_problems(qa, cfg, gids=()):
     """RED 대체(진단 평가 C7 — 설정·의존성·동작 불변 리팩터링은 실패 재현이 어색하다): 「QA 결과」
-    '- RED 대체: 동작 불변 — <기존 테스트 이름…>'. 이름 하나 이상이 레포에 있고 QA 기록에서 ok이며,
-    테스트 파일은 기준 대비 하나도 바뀌지 않아야 한다(바꾼 테스트로 동작 불변을 증명하지 않는다).
-    테스트가 그대로인 것은 동작 불변의 증명이 아니다(A22-01 — 기존 테스트가 다루지 않는 동작을 바꿔도 통과):
-    바뀐 코드가 설정·의존성 파일(CONFIG_FILE)뿐일 때만 그대로, 그 밖의 코드가 바뀌었으면 사람 승인
-    '(승인 D-nnn)' — 결정 블록이 이 골 ID와 'RED 대체'를 적어야 한다."""
+    '- RED 대체: 동작 불변 — <기존 테스트 이름…> (승인 D-nnn)'. 이름 하나 이상이 레포에 있고 QA 기록에서 ok,
+    테스트 파일은 기준 대비 하나도 바뀌지 않아야 한다(추가·수정·삭제 — 바꾼 테스트로 동작 불변을 증명하지 않는다).
+    테스트가 그대로인 것은 동작 불변의 증명이 아니다 — 설정 파일 하나로도 동작이 바뀐다(A22-01·23차). 그래서 '동작 불변'은
+    사람이 승인한다: 결정 블록이 이 골 ID와 'RED 대체'를 적어야 하고, 시뮬레이션 결정이면 merge에서 막힌다(mr_decision_ids)."""
     m = RED_ALT.search(_strip_comments(qa))
     ids = test_ids(re.sub(r"[(（]\s*승인\s*D-\d+\s*[)）]", " ", m.group(1))) if m else []
     if not ids:
-        return ["RED 대체: '- RED 대체: 동작 불변 — <기존 테스트 이름>'에 테스트 이름이 없음"]
+        return ["RED 대체: '- RED 대체: 동작 불변 — <기존 테스트 이름> (승인 D-nnn)'에 테스트 이름이 없음"]
     bad = [f"RED 대체: {t}가 레포 테스트 파일에 없음" for t in ids if not test_exists(t)]
-    try:
-        logic = [f for f in changed_code_files(cfg) if not CONFIG_FILE.search(f.replace("\\", "/"))
-                 and os.path.normpath(f) not in {os.path.normpath(p) for p in _test_files()}]
-    except (RuntimeError, KeyError):
-        logic = ["(기준 비교 실패)"]
-    if logic:
-        ok = re.search(r"[(（]\s*승인\s*(D-\d+)\s*[)）]", m.group(1))
-        if not (ok and _decision_names(ok.group(1), "RED 대체", list(gids), cfg)):
-            bad.append(f"RED 대체: 설정·의존성 밖의 코드가 바뀜({', '.join(logic[:3])}) — 테스트가 그대로인 것은 동작 불변의 "
-                       "증명이 아니다. RED(qa_run.py --red --mr)를 남기거나 사람 승인: 결정 블록에 이 골 ID와 'RED 대체'를 적고 "
-                       "'- RED 대체: 동작 불변 — <테스트> (승인 D-nnn)'")
+    ok = re.search(r"[(（]\s*승인\s*(D-\d+)\s*[)）]", m.group(1))
+    if not (ok and _decision_names(ok.group(1), "RED 대체", list(gids), cfg)):
+        bad.append("RED 대체는 사람 승인이 있어야 한다 — 테스트가 그대로인 것은 동작 불변의 증명이 아니다. RED(qa_run.py --red --mr)를 "
+                   "남기거나, 결정 블록(D-nnn)에 이 골 ID와 'RED 대체'를 적고 '- RED 대체: 동작 불변 — <테스트> (승인 D-nnn)'")
     try:
         changed = changed_test_files(cfg)
     except (RuntimeError, KeyError):

@@ -79,4 +79,4 @@ gh pr edit <번호> --body-file $MR && gh pr comment <번호> --body "$(sed -n '
 | 근거 테스트가 실제로 돌았고 ok인가, QA 대상이 지금 코드인가, 상태 셋 | merge 게이트(`mr_check`, 기계) — `[x]`는 이 검사를 통과해야 의미가 있다 |
 | 정책 결정·위험 인수·우회 | 사람(사용자) |
 
-결정 블록에 「시뮬레이션」(E2E·리허설)이라고 적힌 결정은 운영 승인이 아니다 — merge가 `SIMULATED-DECISION`으로 막는다. 리허설 레포(`.vibe-flow.json` `"rehearsal": true`)에서만 `[state] SIMULATED-DECISION`으로 통과한다(`verify-evidence`는 STATE로 낸다). 위험 판단은 구현자 혼자 하지 않는다: 「위험: 없음」인데 바뀐 코드에 금액·권한·삭제 식별자가 있으면 review 단계부터 `- 위험 판단: <이유>`가 필요하고, 설계 확인(Codex)의 `POLICY:` 항목은 「영향·위험」 미확인으로 옮겨야 한다. 표준·강화는 구문 검사(`syntax_check`)만인 test_cmd로 merge하지 않는다.
+결정 블록에 「시뮬레이션」(E2E·리허설)이라고 적힌 결정은 운영 승인이 아니다 — merge가 `SIMULATED-DECISION`으로 막는다. 리허설 실행(환경변수 `VF_REHEARSAL=1`)에서만 `[state] SIMULATED-DECISION`으로 통과한다 — 커밋된 설정으로는 열리지 않는다. 제3자 재검증은 `verify-evidence --rehearsal`을 명시했을 때만 같은 상태(STATE)로 통과하고, 없으면 실패다(운영 검증). RED 대체 승인 `(승인 D-nnn)`도 같은 검사를 받는다. 위험 판단은 구현자 혼자 하지 않는다: 「위험: 없음」인데 바뀐 코드에 금액·권한·삭제 식별자가 있으면 review 단계부터 `- 위험 판단: <이유>`가 필요하고, 설계 확인(Codex)의 `POLICY:` 항목은 「영향·위험」 미확인으로 옮겨야 한다. 표준·강화는 구문 검사(`syntax_check`)만인 test_cmd로 merge하지 않는다.

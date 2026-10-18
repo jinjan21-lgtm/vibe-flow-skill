@@ -1,6 +1,6 @@
 """런 6 진단 평가 C7 감점 처리. 실행: python -m unittest tests/test_r6_c7.py -v
 
-- 시뮬레이션 결정은 운영 merge를 열지 않는다 — 리허설 레포(.vibe-flow.json "rehearsal": true)에서만 REHEARSAL 상태로 통과
+- 시뮬레이션 결정은 운영 merge를 열지 않는다 — 리허설 실행(환경변수 VF_REHEARSAL=1)에서만 상태로 통과
 - 설계 확인이 CONFIRM이어도 major 지적은 「설계 확인」에 '- 반영: <id> — <어떻게>'(또는 '- 넘김: <id> — 골 후보 <사유>')로 처리해야 build
 """
 import contextlib
@@ -39,11 +39,10 @@ class SimulatedDecisionGateTest(Quiet):
         miss = self.miss("merge")
         self.assertTrue(any(x.startswith("SIMULATED-DECISION D-002") for x in miss), miss)
 
-    def test_rehearsal_repo_allows_with_state(self):
-        cfg = json.loads(open(".vibe-flow.json", encoding="utf-8").read())
-        cfg["rehearsal"] = True
-        self.write(".vibe-flow.json", json.dumps(cfg))
-        self.assertFalse(any(x.startswith("SIMULATED-DECISION") for x in self.miss("merge")), self.miss("merge"))
+    def test_rehearsal_run_allows_with_state(self):   # 리허설은 실행 환경 VF_REHEARSAL=1만(A22-02)
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"VF_REHEARSAL": "1"}):
+            self.assertFalse(any(x.startswith("SIMULATED-DECISION") for x in self.miss("merge")), self.miss("merge"))
 
 
 class DesignMajorHandledTest(Quiet):

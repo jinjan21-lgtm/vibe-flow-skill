@@ -15,7 +15,8 @@
                                                    d*·r*.txt → <핸드오프>/mr/G-###.md·-qa.json·-review.md (기록 전에).
                                                    「골」이 여럿이면 골마다 쓴다. 리뷰 원문은 도장(goal·branch·base)이
                                                    이 MR 골·지금 브랜치·지금 기준과 같은 회차만
-  python handoff.py verify-evidence [G-###] [--commit <sha>] [--run-tests]
+  python handoff.py verify-evidence [G-###] [--commit <sha>] [--run-tests] [--rehearsal]
+                                                   (--rehearsal: 리허설 검증 — 시뮬레이션 결정을 막지 않는다. 운영 검증엔 쓰지 않는다)
                                                    새 clone 재검증 = 재연: 그 커밋(기본 HEAD)의 커밋된 증거만으로 임시 clone에
                                                    .vibe/를 되살려 로컬과 같은 `mr_check --stage merge`를 돌린다(차이는
                                                    REPLAY_DIFF 표뿐). --run-tests: 커밋된 코드에서 test_cmd를 다시 돌려 기록과
@@ -617,7 +618,10 @@ def replay(sha, gid, cfg, hdir, show, out, rerun=False):
         mr_local = re.sub(r"(?<![\w/.-])(G-\d{3,}-evidence/)", lambda m: f"{hdir}/mr/{m.group(1)}", mr_raw)
         mr_path = os.path.join(vd, f"mr-{gid}.md")
         write(mr_path, mr_local)
-        env = {**os.environ, "VF_REPLAY": json.dumps({"base": base})}
+        env = {k: v for k, v in os.environ.items() if k != "VF_REHEARSAL"}
+        env["VF_REPLAY"] = json.dumps({"base": base})
+        if REHEARSAL:   # 검증자가 --rehearsal로 명시했을 때만 — 커밋된 설정·남은 환경변수로는 열리지 않는다(A22-02)
+            env["VF_REHEARSAL"] = "1"
         here = os.path.dirname(os.path.abspath(__file__))
         r = subprocess.run([sys.executable, os.path.join(here, "mr_check.py"), mr_path, "--stage", "merge"], cwd=tmp,
                            env=env, capture_output=True, text=True, encoding="utf-8")
@@ -658,6 +662,7 @@ def replay(sha, gid, cfg, hdir, show, out, rerun=False):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+REHEARSAL = False   # verify-evidence --rehearsal (리허설 검증 — 시뮬레이션 결정 허용, 운영 검증 아님)
 RUN_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "HOME",
            "USERPROFILE", "LANG", "LC_ALL", "PYTHONIOENCODING", "PYTHONUTF8", "VF_REPLAY")
 
@@ -818,9 +823,10 @@ if __name__ == "__main__":
         check_record(cfg, a[2] if len(a) > 2 and a[1] == "--commit" else None)
     elif a[:1] == ["export-evidence"] and len(a) == 2:
         export_evidence(cfg, a[1])
-    elif a[:1] == ["verify-evidence"] and len(a) <= 5:
+    elif a[:1] == ["verify-evidence"] and len(a) <= 6:
         rerun = "--run-tests" in a   # 커밋의 test_cmd 재실행은 명시적으로만(A10-07). 없으면 UNPROVEN(종료 4, A10-03)
-        rest = [x for x in a[1:] if x != "--run-tests"]
+        REHEARSAL = "--rehearsal" in a   # 리허설 검증(시뮬레이션 결정 허용)은 검증자가 명시할 때만
+        rest = [x for x in a[1:] if x not in ("--run-tests", "--rehearsal")]
         at = rest[rest.index("--commit") + 1] if "--commit" in rest[:-1] else None
         gs = [x for x in rest if x != "--commit" and x != at]
         if len(gs) > 1 or (gs and not re.fullmatch(r"G-\d{3,}", gs[0])) or ("--commit" in rest and not at):
