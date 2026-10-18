@@ -335,3 +335,9 @@ E2E S6: 4건 모두 merge·`verify-evidence --run-tests` 통과(t4s2는 시뮬�
 | C7-03 | 평가 | 설정·리팩터링에도 RED 강제 | `- RED 대체: 동작 불변 — <기존 테스트>`: 이름 실재·QA ok·기준 대비 테스트 파일 무변경일 때만 |
 | C7-04 | 평가 | 팀 설치 예시 test_cmd(구문 검사)와 표준·강화 규칙 충돌, 브랜치 규칙 분산 | setup.md 용도 명시·테스트 러너 안내, SKILL.md 팀·개인 브랜치 |
 | T-01 | 테스트 | `test_crash_not_red`가 바뀐 안내 문구를 그대로 찾음(S8 전체 실행에서도 실패) | 의미(RED 아님·red 기록 없음)로 단언 |
+
+**22차(S9 f30c82c):** A20-02·A21-01 minor 그대로(악화 없음). 새 지적 1건:
+
+| ID | 심각도 | 내용 | 처리 |
+|---|---|---|---|
+| A22-01 | major | RED 대체가 「테스트 파일 무변경 + 기존 테스트 ok」만 보아, 기존 테스트가 다루지 않는 기능 동작을 바꿔도 RED 없이 통과(재현: VIP 0원 분기 추가) | 바뀐 코드가 설정·의존성 파일(`CONFIG_FILE`)뿐일 때만 그대로. 그 밖의 코드가 바뀌면 사람 승인 `(승인 D-nnn)` — 결정 블록에 골 ID와 'RED 대체'. 테스트 `test_behavior_code_change_needs_approval`·`test_code_change_with_decision_ok`(수정 전 실패 확인) |

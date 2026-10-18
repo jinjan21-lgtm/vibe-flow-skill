@@ -1140,7 +1140,7 @@ def red_evidence(qa, gids=(), cfg=None):
     if select_red(qa, gids, cfg):
         return []
     if RED_ALT.search(_strip_comments(qa)):
-        bad = red_alt_problems(qa, cfg)
+        bad = red_alt_problems(qa, cfg, gids)
         if not bad:
             print("[state] RED-ALT — 동작 불변 변경: 바뀌지 않은 기존 테스트가 QA에서 ok(실패 재현 대신)")
         return bad
@@ -1162,15 +1162,39 @@ def changed_test_files(cfg):
     return [f for f in names if f and os.path.normpath(f) in tests]
 
 
-def red_alt_problems(qa, cfg):
+CONFIG_FILE = re.compile(r"(?i)(?:^|/)(?:[^/]+\.(?:json|toml|ini|cfg|ya?ml|lock|conf|env\.example)|requirements[^/]*\.txt|"
+                         r"Pipfile|Gemfile|go\.(?:mod|sum)|\.[^/]*rc|Dockerfile|Makefile|\.gitignore|\.gitattributes|"
+                         r"\.editorconfig|setup\.cfg)$")
+
+
+def changed_code_files(cfg):
+    """기준 대비 지금 작업물에서 바뀐 코드 파일(기록·.vibe·추적 산출물 제외 — code_diff)."""
+    return code_diff(vf_git.base_tree(cfg["base"]), vf_git.snapshot(), cfg)[0]
+
+
+def red_alt_problems(qa, cfg, gids=()):
     """RED 대체(진단 평가 C7 — 설정·의존성·동작 불변 리팩터링은 실패 재현이 어색하다): 「QA 결과」
     '- RED 대체: 동작 불변 — <기존 테스트 이름…>'. 이름 하나 이상이 레포에 있고 QA 기록에서 ok이며,
-    테스트 파일은 기준 대비 하나도 바뀌지 않아야 한다(바꾼 테스트로 동작 불변을 증명하지 않는다)."""
+    테스트 파일은 기준 대비 하나도 바뀌지 않아야 한다(바꾼 테스트로 동작 불변을 증명하지 않는다).
+    테스트가 그대로인 것은 동작 불변의 증명이 아니다(A22-01 — 기존 테스트가 다루지 않는 동작을 바꿔도 통과):
+    바뀐 코드가 설정·의존성 파일(CONFIG_FILE)뿐일 때만 그대로, 그 밖의 코드가 바뀌었으면 사람 승인
+    '(승인 D-nnn)' — 결정 블록이 이 골 ID와 'RED 대체'를 적어야 한다."""
     m = RED_ALT.search(_strip_comments(qa))
-    ids = test_ids(m.group(1)) if m else []
+    ids = test_ids(re.sub(r"[(（]\s*승인\s*D-\d+\s*[)）]", " ", m.group(1))) if m else []
     if not ids:
         return ["RED 대체: '- RED 대체: 동작 불변 — <기존 테스트 이름>'에 테스트 이름이 없음"]
     bad = [f"RED 대체: {t}가 레포 테스트 파일에 없음" for t in ids if not test_exists(t)]
+    try:
+        logic = [f for f in changed_code_files(cfg) if not CONFIG_FILE.search(f.replace("\\", "/"))
+                 and os.path.normpath(f) not in {os.path.normpath(p) for p in _test_files()}]
+    except (RuntimeError, KeyError):
+        logic = ["(기준 비교 실패)"]
+    if logic:
+        ok = re.search(r"[(（]\s*승인\s*(D-\d+)\s*[)）]", m.group(1))
+        if not (ok and _decision_names(ok.group(1), "RED 대체", list(gids), cfg)):
+            bad.append(f"RED 대체: 설정·의존성 밖의 코드가 바뀜({', '.join(logic[:3])}) — 테스트가 그대로인 것은 동작 불변의 "
+                       "증명이 아니다. RED(qa_run.py --red --mr)를 남기거나 사람 승인: 결정 블록에 이 골 ID와 'RED 대체'를 적고 "
+                       "'- RED 대체: 동작 불변 — <테스트> (승인 D-nnn)'")
     try:
         changed = changed_test_files(cfg)
     except (RuntimeError, KeyError):
