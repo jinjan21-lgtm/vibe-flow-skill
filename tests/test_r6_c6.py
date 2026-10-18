@@ -72,6 +72,18 @@ class DesignPolicyLinkTest(Quiet):
         self.write("mr.md", body)
         self.assertFalse(any("설계 확인 POLICY" in x for x in self.miss("build")), self.miss("build"))
 
+    def test_design_policy_not_closed_by_self_resolution(self):   # E2E S6 t4s2: 테스트 이름만 적어도 닫힐 수 있었다
+        import mr_check
+        seed_design(extra="POLICY: ADR 법인 할인 포함 여부 — 보고 수치 정의가 바뀜\n")
+        self.mr()
+        with open("mr.md", encoding="utf-8") as f:
+            s = mr_check.sections(f.read())
+        s["영향·위험"] = "- 위험: 정렬 순서 변경\n- 미확인: ADR 법인 할인 포함 여부\n- 해소: ADR 법인 할인 포함 여부 — app.py:1\n"
+        self.write("app.py", "x = 1\n")
+        st = mr_check.verification_states(s, ["G-001"], self.vf.config(),
+                                          design_items=mr_check.design_policy_items("G-001", self.vf.config()))
+        self.assertTrue(any(k == "POLICY-PENDING" and "ADR" in x for k, x, _ in st), st)
+
     def test_policy_none_ok(self):
         seed_design(extra="POLICY: 없음\n")
         self.mr()

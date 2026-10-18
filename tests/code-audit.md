@@ -299,3 +299,17 @@ E2E S4: t3z1·t3z2·t4z1 merge·`verify-evidence --run-tests` 통과(숨은 테�
 | A18-01 | major | jest 이름 속 'a›b'를 공백 정규화로 'a › b'와 같게 만들어 없는 테스트를 있는 것으로 판정 | `js_parts`의 구분자는 러너가 쓰는 '공백 › 공백'·'공백 > 공백'뿐 — 이름 속 'a›b'·'a>b'는 그대로, vitest 표기만 jest 모양으로 |
 
 E2E S5: 4건 모두 merge·`verify-evidence --run-tests` 통과(2건은 시뮬레이션 정책 결정 뒤 계약 변경으로 리뷰·QA 재실행).
+
+| 19차 (S6 e34ec98) | A18-01 해소 | A19-01~A19-03 (major 3) · A19-04 (minor) | 아래 |
+
+### 19차·E2E S6 처리 (tests/test_r6_audit19.py, test_r6_c6.py — 실패 확인 뒤 수정)
+
+| ID | 출처 | 내용 | 처리 |
+|---|---|---|---|
+| A19-01 | 19차 major | build·재연이 설계 확인 원문의 새 형식(요소별 CHECKED·POLICY)을 다시 보지 않음 | build 게이트가 최근 유효 설계 회차 원문에 `review.design_problems`를 다시 적용(옛 형식·변조 원문 차단) |
+| A19-02 | 19차 major | 없는 결정 ID(`정책 결정: D-999`)로 설계 POLICY가 덮임 | POLICY를 덮는 정책 결정 줄은 `_decision_names`(결정 실재·골 ID·항목) 통과만 |
+| A19-03 | 19차 major | `delete_account`·`payment_amount`처럼 밑줄·camelCase 속 위험 단어를 놓침 | `risk_tokens`가 식별자를 snake·camel로 쪼개 토큰 대조(흔한 total·remove는 제외) |
+| A19-04 | 19차 minor | 구문 검사 뒤 실제 테스트를 잇는 명령까지 막음 | `syntax_only_cmd` — 다른 명령을 잇지 않은 구문 검사만 |
+| S6-E1 | E2E t4s2 | 설계 POLICY 항목을 테스트 이름 '해소'로 닫을 수 있었음(에이전트는 사람 결정 몫이라 쓰지 않고 보고) | 설계 POLICY 항목은 정책 결정으로만 닫힘(`verification_states(design_items=…)`) |
+
+E2E S6: 4건 모두 merge·`verify-evidence --run-tests` 통과(t4s2는 시뮬레이션 정책 결정 뒤). 숨은 테스트 통과.

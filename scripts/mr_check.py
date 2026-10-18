@@ -588,9 +588,15 @@ def check(text, stage, cfg):
                 miss.append(f"「설계 확인」은 '판정: 확정'인데 설계 확인 기록이 뒷받침하지 않음({why}) — "
                             "review.py --design 1(또는 2)을 지금 브랜치에서 다시")
             else:   # 확인 기록은 그때의 「설계」 문구에 묶인다 — 해시 없는 예전 기록도 stale
-                dn = latest_round("d", goal, cfg)[0]
+                dn, _, dtext = latest_round("d", goal, cfg)
                 if record_fields(os.path.join(REVIEW_DIR, f"d{dn}.meta")).get("design") != design_hash(text, cfg):
                     miss.append(f"설계가 확인 뒤 바뀜(d{dn}.meta) — review.py --design 다시(남은 회차 안에서) 또는 사람 판정")
+                # 원문 형식도 review.py가 받을 때와 같은 규칙으로 다시 본다(A19-01 — 원문이 뒤에 바뀌거나 옛 형식이면)
+                import review as _rv
+                bad = _rv.design_problems(dtext)
+                if bad:
+                    miss.append(f"설계 확인 원문 d{dn}.txt가 지금 형식이 아님(요소별 CHECKED·POLICY): {'; '.join(bad[:3])} — "
+                                "review.py --design 다시")
         if len(re.findall(r"^-\s*확인\s*\d", dc, re.M)) > 2:
             miss.append("설계 확인이 2회를 넘음 — 사람 판정 필요")
         if skipped and not confirmed and risky(s):
@@ -644,7 +650,7 @@ def check(text, stage, cfg):
         miss += checked_run_problems(goal, cfg, s.get("QA 결과", ""), text)
         if profile(s) != "경량":
             miss += red_evidence(s.get("QA 결과", ""), gids, cfg)
-            if "syntax_check" in (cfg.get("test_cmd") or ""):
+            if syntax_only_cmd(cfg.get("test_cmd") or ""):
                 miss.append("표준·강화 프로필 — test_cmd가 구문 검사만(syntax_check)이다. 구문 검사만으로는 동작을 확인하지 않는다: "
                             "완료 조건을 확인하는 자동 테스트를 두고 test_cmd에 넣는다")
         for did in mr_decision_ids(text):
@@ -681,9 +687,28 @@ def mr_decision_ids(text):
 
 
 # 위험 자기 분류 교차 확인(진단 평가 C6): '위험: 없음'이어도 바뀐 코드(추가된 줄)에 이런 식별자가 있으면 판단 근거를 적게 한다
-RISK_CODE = re.compile(r"\b(?:price|amount|total|tax|discount|refund|payment|charge|invoice|billing|money|currency|"
-                       r"auth\w*|login|password|passwd|token|secret|permission|role|admin|delete|drop|truncate|migrat\w*)\b"
-                       r"|금액|요금|세금|할인|환불|결제|권한|인증|비밀번호|삭제", re.I)
+RISK_WORDS = {"price", "amount", "tax", "discount", "refund", "payment", "charge", "invoice", "billing",
+              "money", "currency", "auth", "authn", "authz", "authorize", "authentication", "login", "password", "passwd",
+              "token", "secret", "permission", "permissions", "role", "roles", "admin", "delete", "drop", "truncate",
+              "migrate", "migration", "purge"}   # 흔한 단어(total·remove)는 빼서 잡음을 줄인다
+RISK_KO = re.compile(r"금액|요금|세금|할인|환불|결제|권한|인증|비밀번호|삭제")
+
+
+def risk_tokens(line):
+    """한 줄에서 위험 식별자 토큰 — snake_case·camelCase를 쪼개서 본다(A19-03: delete_account·paymentAmount도)."""
+    out = set()
+    for ident in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", line or ""):
+        for part in ident.split("_"):
+            for tok in re.findall(r"[A-Z]+(?=[A-Z][a-z]|\b|\d)|[A-Z]?[a-z]+|\d+", part):
+                if tok.lower() in RISK_WORDS:
+                    out.add(tok.lower())
+    out.update(m.group(0) for m in RISK_KO.finditer(line or ""))
+    return out
+
+
+def syntax_only_cmd(cmd):
+    """test_cmd가 구문 검사(syntax_check)만 하는가 — 뒤에 다른 명령을 잇는(&&·;·||) 경우는 아니다(A19-04)."""
+    return "syntax_check" in cmd and not re.search(r"&&|\|\||;", cmd)
 
 
 def risk_code_hits(cfg):
@@ -702,14 +727,13 @@ def risk_code_hits(cfg):
         diff = vf_git.git("diff", "-U0", base, cur, "--", f)
         for line in diff.splitlines():
             if line.startswith("+") and not line.startswith("+++"):
-                hits.update(m.group(0).lower() for m in RISK_CODE.finditer(line))
+                hits.update(risk_tokens(line[1:]))
     return sorted(hits)[:5]
 
 
-def design_policy_problems(goal, cfg, s):
-    """설계 확인(Codex)이 적은 'POLICY: <항목> — <이유>'는 MR 「영향·위험」 '- 미확인:' 항목이나 '- 정책 결정: D-nnn — <항목>'에
-    그대로 있어야 한다(진단 평가 C6 — 정책 판단 필요성을 구현 에이전트 혼자 분류하지 않게). 최근 유효 설계 확인 회차 기준."""
-    got = latest_round("d", goal, cfg)
+def design_policy_items(goal, cfg):
+    """최근 유효 설계 확인 회차의 'POLICY: <항목> — <이유>' 항목 이름('없음' 제외)."""
+    got = latest_round("d", goal, cfg) if goal else None
     if not got:
         return []
     items = []
@@ -717,11 +741,21 @@ def design_policy_problems(goal, cfg, s):
         name = re.split(r"\s+[—–]\s+", v.strip(), maxsplit=1)[0].strip()
         if name and not _none(name):
             items.append(name)
+    return items
+
+
+def design_policy_problems(goal, cfg, s):
+    """설계 확인(Codex)이 적은 'POLICY: <항목> — <이유>'는 MR 「영향·위험」 '- 미확인:' 항목이나 '- 정책 결정: D-nnn — <항목>'에
+    그대로 있어야 한다(진단 평가 C6 — 정책 판단 필요성을 구현 에이전트 혼자 분류하지 않게). 최근 유효 설계 확인 회차 기준."""
+    items = design_policy_items(goal, cfg)
     if not items:
         return []
     risk = re.sub(r"<!--.*?-->", "", s.get("영향·위험", ""), flags=re.S)
     listed = [x for line in re.findall(r"^\s*[-*]?\s*(?:미확인|정책 미결)\s*:(.*)$", risk, re.M) for x in (_items(line) or [])]
-    listed += re.findall(r"^\s*[-*]?\s*정책 결정\s*:\s*D-\d+\s*[—–:-]+\s*(\S.*?)\s*$", risk, re.M)
+    gids = re.findall(r"\bG-\d{3,}\b", goal or "")
+    # 정책 결정 줄은 그 결정이 실재하고 골 ID와 항목을 적었을 때만 POLICY를 덮는다(A19-02 — 없는 D-999로 비켜 가지 못하게)
+    listed += [item for did, item in re.findall(r"^\s*[-*]?\s*정책 결정\s*:\s*(D-\d+)\s*[—–:-]+\s*(\S.*?)\s*$", risk, re.M)
+               if _decision_names(did, item, gids, cfg)]
     lack = [x for x in items if not any(_same(x, y) for y in listed)]
     return [f"설계 확인 POLICY 「{x}」가 MR 「영향·위험」 '- 미확인:'(또는 '- 정책 결정: D-nnn — {x}')에 없음 — 그대로 옮긴다(사람 결정 전 merge 차단)"
             for x in lack]
@@ -953,7 +987,7 @@ def _resolution_ok(why, qa):
     return True
 
 
-def verification_states(s, gids, cfg):
+def verification_states(s, gids, cfg, design_items=()):
     """MR 섹션에서 검증·결정 상태 [(상태, 항목, 근거)]. 상태는 STATES 중 하나 — 비면 막을 것이 없다.
     값이 비었거나 자리표시(<…>)뿐인 줄은 '없음'이 아니다 — 그 줄 자체가 UNVERIFIED·POLICY-PENDING이다(A9-01)."""
     qa = re.sub(r"<!--.*?-->", "", s.get("QA 결과", ""), flags=re.S)
@@ -973,8 +1007,9 @@ def verification_states(s, gids, cfg):
         out.append(("ACCEPTED-RISK" if hit else "UNVERIFIED", x, hit))
     closed = [item for did, item in re.findall(r"^\s*[-*]?\s*정책 결정\s*:\s*(D-\d+)\s*[—–:-]+\s*(\S.*?)\s*$", risk, re.M)
               if _decision_names(did, item, gids, cfg)]
+    # 설계 확인(Codex)이 POLICY로 낸 항목은 사람 결정으로만 닫힌다 — 구현자가 테스트 이름으로 '해소'하지 못한다(E2E S6 t4s2)
     closed += [item for item, why in re.findall(r"^\s*[-*]?\s*해소\s*:\s*(\S.*?)\s*[—–]+\s*(\S.*?)\s*$", risk, re.M)
-               if _resolution_ok(why, s.get("QA 결과", ""))]
+               if _resolution_ok(why, s.get("QA 결과", "")) and not any(_same(item, d) for d in design_items)]
     for label in ("미확인", "정책 미결"):
         for line in re.findall(rf"^\s*[-*]?\s*{label}\s*:(.*)$", risk, re.M):
             got = _items(line)
@@ -995,7 +1030,8 @@ def unverified_problems(qa, gids, cfg, s=None):
     if not re.search(r"^\s*[-*]?\s*미검증·생략 항목과 사유\s*:", qa_clean, re.M):
         return ["「QA 결과」에 '- 미검증·생략 항목과 사유:' 줄 없음(없으면 '없음')"]
     miss = []
-    for st, item, did in verification_states(s, gids, cfg):
+    goal = ",".join(sorted(set(gids)))
+    for st, item, did in verification_states(s, gids, cfg, design_items=design_policy_items(goal, cfg)):
         if st == "UNVERIFIED":
             miss.append(f"UNVERIFIED {item} — 검증한다(미검증은 결정으로 통과되지 않는다. 배포 위험을 인수하려면 사용자 결정 "
                         "'- 위험 인수: D-nnn — <항목>' + 사용자가 직접 우회)")

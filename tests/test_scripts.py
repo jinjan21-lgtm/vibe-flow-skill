@@ -83,7 +83,9 @@ def seed_design(goal="G-001", n=1, verdict="CONFIRM", extra="", mr=None):
     """지금 브랜치·기준의 설계 확인 기록(d<N>.txt·d<N>.meta). 「설계 확인」 '판정: 확정'은 이 기록과 대조된다."""
     import mr_check
     import vf_git
-    _vibe_record(f"d{n}.txt", f"{extra}VERDICT: {verdict}\n")
+    # 설계 확인 원문은 요소별 CHECKED + POLICY 형식이어야 게이트가 받는다(A19-01) — extra에 POLICY가 있으면 그것을 쓴다
+    policy = "" if re.search(r"^POLICY:", extra, re.M) else "POLICY: 없음\n"
+    _vibe_record(f"d{n}.txt", f"DESIGN: {n}\n{DESIGN_CHECKED}{policy}{extra}VERDICT: {verdict}\n")
     _vibe_record(f"d{n}.meta", mr_check.record_stamp(goal, vf_git.config()) + "diverged: no\n"
                  + f"design: {mr_check.design_hash(MR_OK if mr is None else mr)}\n")
 
