@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from test_scripts import MR_OK, PY, SCRIPTS, Repo, seed_design, seed_qa_run, seed_review, sh  # noqa: E402
+from test_scripts import DESIGN_OK, MR_OK, PY, SCRIPTS, Repo, seed_design, seed_qa_run, seed_review, sh  # noqa: E402
 
 FAKE = r'''import os, sys
 a = sys.argv
@@ -71,7 +71,9 @@ class C2(Repo):
     def stage(self, st):
         return self.run_script("mr_check.py", "mr.md", "--stage", st)
 
-    def codex(self, script, *args, reply="VERDICT: CONFIRM\n"):
+    def codex(self, script, *args, reply=None):
+        if reply is None:   # 설계 확인은 다섯 칸 CHECKED·POLICY가 있어야 유효한 응답이다
+            reply = DESIGN_OK if "--design" in args else "VERDICT: CONFIRM\n"
         with open(self.reply, "w", encoding="utf-8") as f:
             f.write(reply)
         env = {**os.environ, "PATH": self.bin + os.pathsep + os.environ["PATH"],

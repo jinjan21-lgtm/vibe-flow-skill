@@ -20,6 +20,11 @@ VERDICT: CONFIRM인데 blocker FINDING이 있는 응답은 모순이라 무효(.
 Codex 호출 전에 mr_check 단계 검사를 직접 돌린다(라운드: review, 설계: draft). 막히면 exit 1.
 설계 확인 입력의 파일 내용은 기준 커밋의 것이다. 라운드 1 응답은 완료 조건 번호(1..N)마다 정확히 한 줄
 'CHECKED: <번호> — <근거>'가 있어야 유효하다(중복·범위 밖·누락·번호 없음은 무효).
+설계 확인 응답은 설계 다섯 칸마다 'CHECKED: <요소> — <근거>'와 POLICY 줄이 있어야 유효하다(design_problems).
+
+라운드 상한: 받아들인 라운드를 .vibe/review/cycles.log에 덧붙이고(append-only), 같은 골·브랜치·기준에서 3라운드를
+쓰면 계약이 바뀌어 1라운드부터 다시 돌리는 것도 막는다. 사람 판정 뒤에만 새 사이클:
+  python review.py --round 1 --mr mr-body.md --after-decision D-nnn   (결정 블록에 이 골 ID와 '리뷰', D-nnn당 한 번)
 """
 import argparse
 import os
@@ -128,6 +133,67 @@ def stage_gate(mr_path, stage):
                  + "\n".join(f" - {x}" for x in miss))
 
 
+CYCLES = os.path.join(D, "cycles.log")
+ROUND_CAP = 3
+
+
+def cycle_ctx(goal, cfg):
+    """사이클 장부의 맥락 — 골·브랜치·기준 tree(record_stamp와 같은 기준). 계약 버전은 넣지 않는다:
+    계약이 바뀌어 1라운드부터 다시 돌려도 같은 상한 안이다."""
+    import mr_check
+    return {"goal": goal, "branch": vf_git.current_branch(), "base": mr_check.current_base(cfg)}
+
+
+def cycle_entries(ctx):
+    """cycles.log에서 이 맥락의 줄들(필드 dict). 줄 형식:
+    'goal=<골> branch=<브랜치> base=<기준 tree> round=<n> verdict=<CONFIRM|CHANGES>' — 받아들인 라운드
+    'cycle=<D-nnn> goal=… branch=… base=…' — 사람 판정 뒤 새 사이클 시작(이 줄 뒤부터 다시 센다)."""
+    if not os.path.exists(CYCLES):
+        return []
+    rows = [dict(re.findall(r"(\w+)=(\S*)", ln)) for ln in read(CYCLES).splitlines()]
+    return [r for r in rows if all(r.get(k, "") == v for k, v in ctx.items())]
+
+
+def rounds_used(ctx):
+    """마지막 cycle 표식 뒤에 받아들인 라운드 수."""
+    n = 0
+    for r in cycle_entries(ctx):
+        n = 0 if "cycle" in r else n + ("round" in r)
+    return n
+
+
+def cycle_append(ctx, **kw):
+    """장부에 한 줄 덧붙인다(append-only — 지우거나 고치지 않는다)."""
+    os.makedirs(D, exist_ok=True)
+    head = "".join(f"{k}={v} " for k, v in kw.items() if k == "cycle")
+    tail = "".join(f" {k}={v}" for k, v in kw.items() if k != "cycle")
+    with open(CYCLES, "a", encoding="utf-8", newline="\n") as f:
+        f.write(head + " ".join(f"{k}={v}" for k, v in ctx.items()) + tail + "\n")
+
+
+def cycle_gate(ctx, n, did, cfg):
+    """Codex 전 라운드 상한 검사. did(--after-decision)가 있으면 새 사이클을 열 수 있는지 본다 — 열 수 있으면 True."""
+    import mr_check
+    if did:
+        if n != 1:
+            sys.exit("[review] --after-decision은 새 사이클이라 --round 1과만 쓴다.")
+        why = mr_check.decision_problem(did, re.findall(r"\bG-\d{3,}\b", ctx["goal"]), cfg) \
+            if re.fullmatch(r"D-\d+", did) else f"결정 ID 형식 아님: {did} (D-nnn)"
+        if not why and "리뷰" not in mr_check.decision_block(did, cfg)[1]:
+            why = f"결정 블록 {did}에 '리뷰'가 없음 — 리뷰를 다시 받기로 한 사람 판정이어야 한다"
+        if not why and any(r.get("cycle") == did for r in cycle_entries(ctx)):
+            why = f"{did}는 이미 이 골·브랜치·기준의 리뷰 사이클을 한 번 열었다 — 새 사람 판정(D-nnn)이 필요"
+        if why:
+            sys.exit(f"[review] --after-decision {did} 거부: {why}. Codex를 부르지 않습니다.")
+        return True
+    used = rounds_used(ctx)
+    if used >= ROUND_CAP:
+        sys.exit(f"[review] 리뷰 3라운드를 이미 썼다(계약이 바뀌어 1라운드부터 다시 돌리는 경우 포함) — "
+                 f"사람 판정(D-nnn) 뒤에만 새 리뷰 사이클. 이 골·브랜치·기준에서 받은 라운드 {used}회({CYCLES}). "
+                 "결정 블록에 이 골 ID와 '리뷰'를 적고 'review.py --round 1 --after-decision D-nnn'. Codex를 부르지 않습니다.")
+    return False
+
+
 def conditions(mr):
     """「완료 조건」 항목 문구 — mr_check.completion_items와 같은 파서(번호 목록 '1. [x] …'도 같다)."""
     import mr_check
@@ -189,6 +255,59 @@ def design_system(old, cur):
 
 
 DESIGN_PROMPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "templates", "design-prompt.md")
+DESIGN_ELEMENTS = ("접근 방식", "바꿀 모듈·파일", "데이터·API 변경", "대안과 선택 이유", "테스트 계획")
+DESIGN_MIN_EVIDENCE = 10   # 'CHECKED: <요소> — <근거>'의 근거 최소 글자 수 — '확인함' 같은 빈말로 칸을 채우지 않게
+POLICY_LINE = re.compile(r"^POLICY:[ \t]*(.*)$", re.M)
+DASH_SPLIT = re.compile(r"^(\S.*?)(?:\s*[—–]+\s*|\s+-+\s+)(\S.*)$")   # '<앞> — <뒤>' (— · – · 띄운 -)
+
+
+def _policy_none(v):
+    return bool(re.fullmatch(r"없음\s*\.?", v.strip()))
+
+
+def design_policies(text):
+    """설계 확인 응답의 POLICY 항목 이름 목록. 'POLICY: 없음'이거나 POLICY 줄이 없으면 [].
+
+    형식(templates/design-prompt.md): 요청이 정하지 않은 업무 정책(보고 지표의 뜻·반올림·할인 대상·권한·보존 기간 등)을
+    바꾸는 설계면 항목마다 한 줄 'POLICY: <항목> — <왜 사람 결정이 필요한가>', 없으면 정확히 'POLICY: 없음' 한 줄.
+    mr_check는 최근 유효 설계 확인의 이 항목이 MR 「영향·위험」 '- 미확인:'이나 '- 정책 결정: D-nnn — <항목>'에 있는지 본다."""
+    out = []
+    for v in POLICY_LINE.findall(text):
+        m = DASH_SPLIT.match(v.strip())
+        if m and not _policy_none(v):
+            out.append(m.group(1).strip())
+    return out
+
+
+def design_problems(text):
+    """설계 확인 응답 형식 검사. 설계 다섯 칸(DESIGN_ELEMENTS)마다 정확히 한 줄 'CHECKED: <요소> — <근거>'
+    (근거 DESIGN_MIN_EVIDENCE자 이상), 그리고 POLICY 줄('없음' 한 줄 또는 '<항목> — <이유>' 한 줄 이상).
+    'DESIGN: 1 / VERDICT: CONFIRM' 두 줄만으로는 무엇을 확인했는지 남지 않는다 — 판정 증거가 아니다."""
+    bad, seen = [], set()
+    for line in re.findall(r"^CHECKED:[ \t]*(.*)$", text, re.M):
+        line = line.strip()
+        el = next((e for e in DESIGN_ELEMENTS if line.startswith(e)), None)
+        m = re.match(r"\s*(?:[—–]+|-+)\s*(.*)$", line[len(el):]) if el else None
+        if not m:
+            bad.append(f"요소·근거 형식 아님: 'CHECKED: {line}' — 'CHECKED: <요소> — <근거>' (요소: {', '.join(DESIGN_ELEMENTS)})")
+            continue
+        if el in seen:
+            bad.append(f"{el} CHECKED 줄 중복")
+            continue
+        seen.add(el)
+        ev = m.group(1).strip()
+        if len(ev) < DESIGN_MIN_EVIDENCE:
+            bad.append(f"{el} 근거가 너무 짧음('{ev}') — 확인한 근거나 검토한 대안을 한 문장 이상({DESIGN_MIN_EVIDENCE}자 이상)")
+    bad += [f"{e} — CHECKED 줄 없음" for e in DESIGN_ELEMENTS if e not in seen]
+    vals = [v.strip() for v in POLICY_LINE.findall(text)]
+    if not vals:
+        bad.append("POLICY 줄 없음 — 'POLICY: 없음' 또는 'POLICY: <항목> — <왜 사람 결정이 필요한가>'")
+    elif any(_policy_none(v) for v in vals) and len(vals) > 1:
+        bad.append("'POLICY: 없음'과 다른 POLICY 줄이 같이 있음")
+    else:
+        bad += [f"POLICY 항목·이유 형식 아님: 'POLICY: {v}' — 'POLICY: <항목> — <왜 사람 결정이 필요한가>'"
+                for v in vals if not _policy_none(v) and not DASH_SPLIT.match(v)]
+    return bad
 
 
 def design_review(n, mr_path, dry):
@@ -244,6 +363,12 @@ def design_review(n, mr_path, dry):
     if bad:
         invalidate(out)
         sys.exit(f"[design] {bad} — 모순된 응답이라 무효, 판정을 적지 않습니다 ({out}.failed). 같은 회차를 다시 돌립니다.")
+    bad = design_problems(text)
+    if bad:
+        invalidate(out)
+        sys.exit(f"[design] Codex 응답이 설계 다섯 칸의 CHECKED 근거·POLICY 줄 형식과 맞지 않습니다 — 무효, "
+                 f"판정을 적지 않습니다 ({out}.failed).\n" + "\n".join(f" - {c}" for c in bad)
+                 + "\n→ 같은 회차를 다시 돌립니다.")
     with open(os.path.join(D, f"d{n}.meta"), "w", encoding="utf-8") as f:
         f.write(mr_check.record_stamp(goal, cfg) + f"diverged: {'yes' if early else 'no'}\nfiles: {', '.join(early)}\n"
                 + f"design: {mr_check.design_hash(read(mr_path))}\n")   # 확인 뒤 「설계」가 바뀌면 build부터 막는다
@@ -251,6 +376,10 @@ def design_review(n, mr_path, dry):
     print(f"DESIGN {n}: VERDICT {v.group(1)} · " + (" · ".join(f"{x['sev']}" for x in fs) or "지적 없음"))
     for x in fs:
         print(" ", x["raw"])
+    pol = design_policies(text)
+    if pol:
+        print("→ 사람 결정이 필요한 정책: " + "; ".join(pol) + " — 「영향·위험」 '- 미확인:'에 그대로 옮기세요"
+              " (결정 뒤 '- 정책 결정: D-nnn — <항목>'). 결정 전에는 merge가 막힙니다.")
     if v.group(1) == "CONFIRM":
         print("→ 「설계 확인」에 '- 확인 %d: 확정'과 '- 판정: 확정'을 적고 구현을 시작하세요 (mr_check --stage build)." % n)
     elif n == 2:
@@ -271,6 +400,8 @@ def main():
     ap.add_argument("--base")
     ap.add_argument("--tests")
     ap.add_argument("--files", nargs="*", default=[])
+    ap.add_argument("--after-decision", metavar="D-nnn",
+                    help="3라운드를 쓴 뒤 사람 판정(결정 블록에 이 골과 '리뷰')으로 새 리뷰 사이클을 연다(--round 1)")
     ap.add_argument("--dry", action="store_true")
     a = ap.parse_args()
     n = a.round
@@ -318,7 +449,12 @@ def main():
             f.write(payload)
         print(out + ".in")
         return
+    cfg = vf_git.config()
+    ctx = cycle_ctx(goal, cfg)
+    new_cycle = cycle_gate(ctx, n, a.after_decision, cfg)   # 상한은 계약 버전과 무관하게 골·브랜치·기준당 3
     stage_gate(a.mr, "review")
+    if new_cycle:
+        cycle_append(ctx, cycle=a.after_decision)
     # 다시 돌리는 라운드와 그 뒤 라운드의 이전 결과는 무효 — 실패해도 옛 스냅샷으로 다음 라운드가 돌지 않게
     for k in range(n, 4):
         invalidate(os.path.join(D, f"r{k}.tree"), os.path.join(D, f"r{k}.txt"))
@@ -360,6 +496,7 @@ def main():
     with open(os.path.join(D, f"r{n}.tree"), "w", encoding="utf-8") as f:
         f.write(f"{cur}\n" + mr_check.record_stamp(goal, vf_git.config()) + code_tree_line(cur)
                 + f"conds: {mr_check.completion_hash(mr)}\ncontract: {mr_check.contract_hash(mr)}\n")   # 리뷰 뒤 완료 조건이 바뀌면 qa·merge가 막는다
+    cycle_append(ctx, round=n, verdict=v.group(1))   # 받아들인 라운드만 센다(실패·무효 실행은 세지 않는다)
     fs = findings(text)
     checked = len(re.findall(r"^CHECKED:\s*\S", text, re.M))
     count = {}

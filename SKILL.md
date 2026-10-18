@@ -26,7 +26,7 @@ description: Use when starting, continuing, or finishing coding work in a repo t
 
 **지금 단계 찾기:** `python $S/mr_check.py <mr> --next` — 처음 실패하는 단계와 맡을 세부 스킬을 알려 준다. 끝까지 맡았으면 그 스킬을 부르고, 끝나면 다시 `--next`. 세션 시작이나 MR 본문이 없을 때는 vibe-claim부터. 스크립트 `S=scripts/`(팀 레포 `.claude/skills/vibe-flow/scripts/`). 유형별 차이는 [docs/task-types.md](docs/task-types.md), 처음 적용은 [setup.md](setup.md).
 
-브랜치 `<접두사>/G-###-<주제>`, 커밋·PR 제목에 `G-###`. 한 worktree = 한 골 = 한 세션.
+브랜치 `<접두사>/G-###-<주제>`, 커밋·PR 제목에 `G-###`. 한 worktree = 한 골 = 한 MR = 한 세션(MR을 나눠야 하면 골도 나눈다).
 
 ## 골 규칙
 

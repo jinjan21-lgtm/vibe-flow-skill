@@ -608,6 +608,14 @@ def check(text, stage, cfg):
             lines, files = diff_size(cfg)
             if lines > lim.get("max_lines", 50) or files > lim.get("max_files", 3):
                 miss.append(f"설계 확인을 생략했지만 코드 변경이 {lines}줄·{files}파일로 커짐 — 코딩을 멈추고 review.py --design 필요")
+    if i >= 2:
+        miss += design_policy_problems(goal, cfg, s)
+    if i >= 3 and profile(s) == "경량":
+        hits = risk_code_hits(cfg)
+        judged = re.search(r"^\s*[-*]?\s*위험 판단\s*:\s*(\S.{9,})$", s.get("영향·위험", ""), re.M)
+        if hits and not judged:
+            miss.append(f"「영향·위험」 위험이 '없음'인데 바뀐 코드에 금액·권한·삭제 관련 식별자({', '.join(hits)}) — 위험을 다시 "
+                        "판단해 '- 위험:'에 적거나(표준·강화), 위험이 아니면 '- 위험 판단: <이유>'를 적는다")
     if i >= 3 and not filled(s, "계획 vs 실제"):
         miss.append("「계획 vs 실제」 비어 있음")
     if i >= 3:
@@ -636,6 +644,12 @@ def check(text, stage, cfg):
         miss += checked_run_problems(goal, cfg, s.get("QA 결과", ""), text)
         if profile(s) != "경량":
             miss += red_evidence(s.get("QA 결과", ""), gids, cfg)
+            if "syntax_check" in (cfg.get("test_cmd") or ""):
+                miss.append("표준·강화 프로필 — test_cmd가 구문 검사만(syntax_check)이다. 구문 검사만으로는 동작을 확인하지 않는다: "
+                            "완료 조건을 확인하는 자동 테스트를 두고 test_cmd에 넣는다")
+        for did in mr_decision_ids(text):
+            if simulated_block(decision_block(did, cfg)[1] or ""):
+                print(f"[state] SIMULATED-DECISION {did} — 시뮬레이션 결정(운영 승인 아님): 실제 결정자 확인 전 운영 배포 금지")
         miss += schema_problems(goal, cfg, s.get("QA 결과", ""))
         if profile(s) == "강화":
             ids, bad_lines = regression_ids(s.get("QA 결과", ""))
@@ -650,6 +664,67 @@ def check(text, stage, cfg):
             if ids:
                 miss += regression_evidence(ids, s.get("QA 결과", ""))
     return miss
+
+
+SIMULATED = re.compile(r"시뮬레이션|simulat", re.I)
+
+
+def simulated_block(blk):
+    """결정 블록이 시뮬레이션 결정(E2E·리허설 — 운영 승인 아님)이라고 적었는가."""
+    return bool(SIMULATED.search(blk or ""))
+
+
+def mr_decision_ids(text):
+    """MR이 근거로 쓴 결정 ID(사람 결정·정책 결정·위험 인수 줄)."""
+    t = re.sub(r"<!--.*?-->", "", text or "", flags=re.S)
+    return sorted(set(re.findall(r"^\s*[-*]?\s*(?:사람 결정|정책 결정|위험 인수|사람 승인)\s*:\s*(D-\d+)", t, re.M)))
+
+
+# 위험 자기 분류 교차 확인(진단 평가 C6): '위험: 없음'이어도 바뀐 코드(추가된 줄)에 이런 식별자가 있으면 판단 근거를 적게 한다
+RISK_CODE = re.compile(r"\b(?:price|amount|total|tax|discount|refund|payment|charge|invoice|billing|money|currency|"
+                       r"auth\w*|login|password|passwd|token|secret|permission|role|admin|delete|drop|truncate|migrat\w*)\b"
+                       r"|금액|요금|세금|할인|환불|결제|권한|인증|비밀번호|삭제", re.I)
+
+
+def risk_code_hits(cfg):
+    """기준 대비 지금 작업물에서 추가된 코드 줄(기록·테스트 파일 제외)에 나온 위험 식별자(최대 5개, 정렬)."""
+    try:
+        base = vf_git.base_tree(cfg["base"])
+        cur = vf_git.snapshot()
+        names = code_diff(base, cur, cfg)[0]
+    except (RuntimeError, KeyError):
+        return []
+    tests = {os.path.normpath(p) for p in _test_files()}
+    hits = set()
+    for f in names:
+        if os.path.normpath(os.path.join(".", f)) in tests or os.path.normpath(f) in tests:
+            continue
+        diff = vf_git.git("diff", "-U0", base, cur, "--", f)
+        for line in diff.splitlines():
+            if line.startswith("+") and not line.startswith("+++"):
+                hits.update(m.group(0).lower() for m in RISK_CODE.finditer(line))
+    return sorted(hits)[:5]
+
+
+def design_policy_problems(goal, cfg, s):
+    """설계 확인(Codex)이 적은 'POLICY: <항목> — <이유>'는 MR 「영향·위험」 '- 미확인:' 항목이나 '- 정책 결정: D-nnn — <항목>'에
+    그대로 있어야 한다(진단 평가 C6 — 정책 판단 필요성을 구현 에이전트 혼자 분류하지 않게). 최근 유효 설계 확인 회차 기준."""
+    got = latest_round("d", goal, cfg)
+    if not got:
+        return []
+    items = []
+    for v in re.findall(r"^POLICY:[ \t]*(.*)$", got[2], re.M):
+        name = re.split(r"\s+[—–]\s+", v.strip(), maxsplit=1)[0].strip()
+        if name and not _none(name):
+            items.append(name)
+    if not items:
+        return []
+    risk = re.sub(r"<!--.*?-->", "", s.get("영향·위험", ""), flags=re.S)
+    listed = [x for line in re.findall(r"^\s*[-*]?\s*(?:미확인|정책 미결)\s*:(.*)$", risk, re.M) for x in (_items(line) or [])]
+    listed += re.findall(r"^\s*[-*]?\s*정책 결정\s*:\s*D-\d+\s*[—–:-]+\s*(\S.*?)\s*$", risk, re.M)
+    lack = [x for x in items if not any(_same(x, y) for y in listed)]
+    return [f"설계 확인 POLICY 「{x}」가 MR 「영향·위험」 '- 미확인:'(또는 '- 정책 결정: D-nnn — {x}')에 없음 — 그대로 옮긴다(사람 결정 전 merge 차단)"
+            for x in lack]
 
 
 def regression_ids(qa):
@@ -667,112 +742,11 @@ def regression_ids(qa):
     return ids, bad
 
 
-TEST_ID = re.compile(r"(?<![\w./\\-])(?:[\w./\\-]+\.py::\w+(?:(?:::|\.)\w+)*|(?:[\w.-]+[/\\])*tests?[/\\][\w./\\-]*\.py"
-                     r"|(?:[A-Za-z_]\w*\.)*test_\w+)(?![\w./\\-])")
+# 테스트 식별자 규칙은 testids.py 한 곳(mr_check·qa_run 공용) — 예전 이름으로 그대로 쓴다
+from testids import (TEST_ID, JS_TEST_START, JS_TRAIL_REF, JS_TEST_FILE, CODE_REF, js_parts, js_names,  # noqa: E402,F401
+                     test_ids, _test_files, test_exists, _last, _qual, test_match)
 
 
-# JS 테스트 식별자(A11-01·12차): qa_run.parse_tests와 같은 모양 — jest '파일 › 묶음 › 이름', vitest '파일 > 묶음 > 이름'.
-# JS 테스트 이름에는 공백·쉼표·괄호·';'가 들어갈 수 있다 — 중간에서 자르지 않는다(A13-02·A15-02): 한 줄에 JS 식별자는 하나,
-# 파일부터 줄 끝까지에서 끝의 '(파일:줄)' 하나만 뗀다(여럿이면 줄을 나눈다 — CHECKED는 조건마다 한 줄, '- 회귀:'는 줄 여럿)
-JS_TEST_START = re.compile(r"(?<![\w./\\-])[\w./\\-]+\.(?:test|spec)\.[cm]?[jt]sx?\s*[›>]")
-JS_TRAIL_REF = re.compile(r"\s*\(\s*[\w./\\-]+\.[A-Za-z0-9]+:\d+(?:-\d+)?\s*\)\s*$")
-JS_TEST_FILE = re.compile(r"\.(?:test|spec)\.[cm]?[jt]sx?$")
-
-
-def js_parts(tid):
-    """JS 식별자 → (파일, 나머지 문자열 — 정규화한 전체). JS 식별자가 아니면 None.
-    구분자는 파일 바로 뒤의 것 하나로 정한다(jest ' › ', vitest ' > ') — 이름 속 '>'·'›'는 쪼개지 않는다(A17-01).
-    대조는 이 전체 문자열의 일치로만 한다(구분자 표기만 맞춤)."""
-    m = re.match(r"\s*([\w./\\-]+\.(?:test|spec)\.[cm]?[jt]sx?)\s*([›>])\s*(\S.*?)\s*$", tid or "")
-    if not m:
-        return None
-    sep = m.group(2)
-    rest = m.group(3)
-    if sep == "›":   # jest: ' › '만 구분자
-        rest = " › ".join(x.strip() for x in rest.split("›"))
-    else:            # vitest: ' > '만 구분자(공백으로 둘러싼 것) — 표기를 jest 모양으로 맞춘다
-        rest = " › ".join(x.strip() for x in re.split(r"\s>\s", rest))
-    return m.group(1).replace("\\", "/"), rest
-
-
-def js_names(rest):
-    """js_parts 나머지의 이름 후보 — 끝에서부터 묶음을 붙여 간다('Suite › a > b'에서 'a > b'처럼 이름에 구분자가 든 경우)."""
-    parts = rest.split(" › ")
-    return [" › ".join(parts[i:]) for i in range(len(parts))][::-1]
-
-
-def test_ids(value):
-    """'- 코드:'·'- 회귀:'·CHECKED 값의 테스트 식별자(test_x · Class.test_x · path/test_x.py::name · tests/…py ·
-    JS '파일 › 묶음 › 이름'·'파일 > 묶음 > 이름')."""
-    js, rest = [], []
-    for line in (value or "").split("\n"):
-        starts = [m.start() for m in JS_TEST_START.finditer(line)]
-        if not starts:
-            rest.append(line)
-            continue
-        rest.append(line[:starts[0]])
-        # 한 줄의 JS 식별자는 하나(A15-02): 이름에는 ';'·','·괄호는 물론 다른 식별자처럼 보이는 문자열도 들어갈 수 있어
-        # 어디서 끊어도 다른 테스트로 바뀔 수 있다 — 첫 시작부터 줄 끝까지, 끝의 '(파일:줄)' 하나만 뗀다. 여럿이면 줄을 나눈다
-        seg = line[starts[0]:]
-        ref = JS_TRAIL_REF.search(seg)
-        js.append((seg[:ref.start()] if ref else seg).strip())
-        if ref:
-            rest.append(ref.group(0))
-    # '파일:줄'(코드 위치)은 테스트 이름이 아니다 — 'test_x (tests/test_a.py:62)'의 경로를 이름으로 뽑지 않는다(E2E S1-E1)
-    return js + TEST_ID.findall(CODE_REF.sub(" ", " ; ".join(rest)))
-
-
-def _test_files():
-    skip = {".git", ".vibe", "node_modules", ".venv", "venv", "__pycache__"}
-    for root, dirs, files in os.walk("."):
-        dirs[:] = [d for d in dirs if d not in skip]
-        in_tests = re.search(r"(^|[/\\])tests?([/\\]|$)", root)
-        for f in files:
-            if in_tests or f.startswith("test") or "_test" in f or JS_TEST_FILE.search(f):
-                yield os.path.join(root, f)
-
-
-def test_exists(tid):
-    """식별자가 레포 테스트 파일에 있는가 — 경로면 그 파일이 있어야, 이름이면 마지막 성분이 테스트 파일에 나와야 한다.
-    JS 식별자는 그 파일이 있고 마지막 이름이 it('…')·test('…')로 정의돼 있어야."""
-    js = js_parts(tid)
-    if js:
-        f, rest_js = js
-        if not os.path.isfile(f):
-            return False
-        with open(f, encoding="utf-8", errors="ignore") as fh:
-            body = fh.read()
-        # 이름은 끝 성분부터(이름 속 구분자 가능) — 그 문자열 그대로 it/test 제목으로 정의돼 있어야
-        return any(re.search(rf"\b(?:it|test)(?:\.\w+)?\(\s*([\"'`]){re.escape(n)}\1", body) for n in js_names(rest_js))
-    path, _, rest = tid.partition("::")
-    if rest and path.endswith(".py") and re.search(r"::|\.", rest):   # 'path.py::Class.test_x' — 그 클래스가 그 파일에 있어야(A17-02)
-        cls = re.split(r"::|\.", rest)[0]
-        try:
-            with open(path, encoding="utf-8", errors="ignore") as fh:
-                if not re.search(rf"^\s*class\s+{re.escape(cls)}\b", fh.read(), re.M):
-                    return False
-        except OSError:
-            return False
-    if path.endswith(".py") and not os.path.isfile(path):
-        return False
-    # 'path.py::Class.test_x'(pytest 경로 + unittest 점 이름 — E2E S3 t3y2)도 마지막 성분이 정의 이름
-    name = re.split(r"::|\.", rest)[-1] if rest else ("" if path.endswith(".py") else tid.split(".")[-1])
-    if not name:
-        return True
-    n = re.escape(name)   # 정의만 — 주석·문자열 속 이름은 테스트가 아니다
-    pat = re.compile(rf"^\s*(?:async\s+)?def\s+{n}\s*\(|^\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*{n}\s*\("
-                     rf"|\b(?:it|test)(?:\.\w+)?\(\s*([\"'`]){n}\1", re.M)
-    for p in ([path] if rest else _test_files()):
-        try:
-            with open(p, encoding="utf-8", errors="ignore") as f:
-                if pat.search(f.read()):
-                    return True
-        except OSError:
-            continue
-    return False
-
-
-CODE_REF = re.compile(r"(?<![\w./\\-])([\w./\\-]+\.[A-Za-z0-9]+):(\d+)(?:-\d+)?(?![\w])")
 CHECKED_LINE = re.compile(r"^CHECKED:[ \t]*(\d+)\s*[—–-]+\s*(\S.*)$", re.M)
 
 
@@ -920,34 +894,6 @@ def checked_run_problems(goal, cfg, qa, text=None):
             if not got or any(v != "ok" for v in got):
                 bad.append(f"완료 조건 {k}의 근거 테스트 {t}({'·'.join(got) or 'QA 기록에 없음'})")
     return [f"리뷰 근거 테스트가 QA 실행에서 ok가 아님 — {', '.join(bad[:4])}"] if bad else []
-
-
-def _last(name):
-    """테스트 이름의 마지막 성분 — 'a.B.test_x' · 'p.py::test_x' · 'test_x (a.B.test_x)' → test_x."""
-    parts = [x for x in re.split(r"::|[.\s()]+", name) if x]
-    return parts[-1] if parts else ""
-
-
-def _qual(name):
-    """비교용 한정 이름 — 'test_x (a.B.test_x)'는 괄호 안, 경로 구분자·'::'는 '.', '.py'는 뺀다."""
-    m = re.fullmatch(r"\s*\S+\s*\(([^()]+)\)\s*", name)
-    n = (m.group(1) if m else name).strip()
-    return re.sub(r"\.py(?=\.|$)", "", re.sub(r"::|[/\\]", ".", n))
-
-
-def test_match(rid, recorded):
-    """'- 회귀:' 식별자와 기록 이름 — 맨 이름(test_x)은 마지막 성분, 한정형(B.test_x · p.py::test_x)은 끝이 그 한정형.
-    JS 식별자는 파일·묶음·이름을 구분자(›·>)와 무관하게 전부 같아야."""
-    jr, jk = js_parts(rid), js_parts(recorded)
-    if jr or jk:
-        return bool(jr and jk and jr == jk)
-    q = _qual(rid)
-    if "." not in q:
-        return _last(recorded) == q
-    r = _qual(recorded)
-    if re.search(r"[/\\]|\.py(?:::|$)", rid):   # 경로를 적은 식별자는 그 파일의 테스트만 — 접미 일치로 다른 경로를 받지 않는다(A17-02)
-        return r == q
-    return r == q or r.endswith("." + q)
 
 
 # 검증·결정 상태(qa-gate.md 「상태 셋」) — merge 출력과 verify-evidence가 같은 이름을 쓴다

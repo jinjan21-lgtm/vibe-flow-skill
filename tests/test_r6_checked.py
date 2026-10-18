@@ -13,6 +13,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_r6_engine import Engine, R1, TEST_FILE  # noqa: E402
+from test_scripts import DESIGN_OK  # noqa: E402
 
 SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
 sys.path.insert(0, SCRIPTS)
@@ -62,7 +63,7 @@ class ReviewInvalidatesTest(Engine):
     def setUp(self):
         super().setUp()
         self.mr()
-        self.ok(self.run_py("review.py", "--design", "1", "--mr", ".vibe/mr-G-001.md", reply="VERDICT: CONFIRM\n"))
+        self.ok(self.run_py("review.py", "--design", "1", "--mr", ".vibe/mr-G-001.md", reply=DESIGN_OK))
         self.write("test_app.py", TEST_FILE)
         self.write("app.py", 'def search(q):\n    return [x for x in ["abc"] if q in x]\n')
 

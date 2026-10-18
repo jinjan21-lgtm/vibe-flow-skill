@@ -289,3 +289,13 @@ E2E S3: t3y1·t4y1 merge·`verify-evidence --run-tests` 통과(숨은 테스트 
 | A17-02 | major | 경로를 적은 파이썬 테스트가 다른 디렉터리의 같은 이름 테스트 ok로 통과(접미 일치) | 경로가 있는 식별자는 정규화한 전체 일치만, `path.py::Class.test_x`는 그 파일에 그 클래스가 있어야. 경로 없는 `Class.test_x`는 예전대로 끝 일치 |
 
 E2E S4: t3z1·t3z2·t4z1 merge·`verify-evidence --run-tests` 통과(숨은 테스트 통과), t4z2는 정책 미결로 정상 정지 → 시뮬레이션 사용자 결정 뒤 이어 감. A17로 판이 바뀌어 S5로 4건 다시.
+
+| 18차 (S5 53d57f6) | A17-01·A17-02 해소 | A18-01 (major 1) | 아래 |
+
+### 18차 처리 (tests/test_r6_audit18.py)
+
+| ID | 심각도 | 내용 | 처리 |
+|---|---|---|---|
+| A18-01 | major | jest 이름 속 'a›b'를 공백 정규화로 'a › b'와 같게 만들어 없는 테스트를 있는 것으로 판정 | `js_parts`의 구분자는 러너가 쓰는 '공백 › 공백'·'공백 > 공백'뿐 — 이름 속 'a›b'·'a>b'는 그대로, vitest 표기만 jest 모양으로 |
+
+E2E S5: 4건 모두 merge·`verify-evidence --run-tests` 통과(2건은 시뮬레이션 정책 결정 뒤 계약 변경으로 리뷰·QA 재실행).

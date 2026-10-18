@@ -16,7 +16,15 @@ SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "script
 sys.path.insert(0, SCRIPTS)
 PY = sys.executable
 
-GOAL = "# {gid} 시험\n<!--\nid: {gid}\nstatus: {st}\n-->\n"
+# review.py --design이 받는 유효한 설계 확인 응답: 설계 다섯 칸마다 CHECKED 한 줄 + POLICY 줄 + VERDICT
+DESIGN_CHECKED = ("CHECKED: 접근 방식 — search에 메모리 필터를 넣는 방식, 호출부는 그대로 둔다\n"
+                  "CHECKED: 바꿀 모듈·파일 — app.py의 search 함수와 테스트 파일만 바뀐다\n"
+                  "CHECKED: 데이터·API 변경 — search(q) 시그니처와 반환 형태가 그대로다\n"
+                  "CHECKED: 대안과 선택 이유 — DB LIKE 대안을 봤고 데이터가 작아 메모리 필터가 단순하다\n"
+                  "CHECKED: 테스트 계획 — 부분 일치 테스트를 먼저 RED로 확인하는 계획이 있다\n")
+DESIGN_OK = "DESIGN: 1\n" + DESIGN_CHECKED + "POLICY: 없음\nVERDICT: CONFIRM\n"
+
+GOAL ="# {gid} 시험\n<!--\nid: {gid}\nstatus: {st}\n-->\n"
 MR_OK = """## 골
 G-001 시험 골
 ## 사용자 가치

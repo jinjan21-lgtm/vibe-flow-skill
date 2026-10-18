@@ -622,6 +622,9 @@ def replay(sha, gid, cfg, hdir, show, out, rerun=False):
         r = subprocess.run([sys.executable, os.path.join(here, "mr_check.py"), mr_path, "--stage", "merge"], cwd=tmp,
                            env=env, capture_output=True, text=True, encoding="utf-8")
         miss = [x.strip()[2:] for x in r.stdout.splitlines() if x.startswith(" - ")]
+        for x in r.stdout.splitlines():   # 막지 않는 상태(시뮬레이션 결정 등)도 제3자에게 보인다
+            if x.startswith("[state] "):
+                print(f"STATE {gid} {x[8:]}")
         if r.returncode and not miss:
             miss = [(r.stdout + r.stderr).strip()[-300:] or "mr_check 실패"]
         out(r.returncode == 0 and not miss, f"{gid} 재연 merge 검사(로컬과 같은 mr_check --stage merge) 통과",

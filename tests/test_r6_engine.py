@@ -15,7 +15,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from test_scripts import GOAL, PY, SCRIPTS, sh  # noqa: E402
+from test_scripts import DESIGN_OK, GOAL, PY, SCRIPTS, sh  # noqa: E402
 
 FAKE = r'''import os, sys
 a = sys.argv
@@ -185,7 +185,7 @@ class Engine(unittest.TestCase):
         """rounds: 리뷰 라운드마다 가짜 Codex 응답(라운드 3은 --files app.py). after_review: 리뷰 뒤·QA 전 변경,
         before_qa: MR 체크 뒤 QA 직전 변경."""
         self.mr(**{k: v for k, v in mr_kw.items() if k != "checked"})
-        self.ok(self.run_py("review.py", "--design", "1", "--mr", ".vibe/mr-G-001.md", reply="VERDICT: CONFIRM\n"))
+        self.ok(self.run_py("review.py", "--design", "1", "--mr", ".vibe/mr-G-001.md", reply=DESIGN_OK))
         self.write("test_app.py", TEST_FILE)
         if red:
             self.ok(self.run_py("qa_run.py", "--red", "--mr", ".vibe/mr-G-001.md"))
