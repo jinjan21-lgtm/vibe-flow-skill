@@ -261,10 +261,23 @@ def claim(cfg, gid, task, branch, push=True):
             add_claim(rem, gid, task, me, branch)
             # judge가 방금 만든 골 파일(아직 커밋 안 됨)도 함께 올려야 다른 참여자가 이 골을 본다
             own = [rem] + [f"{goals}/{fn}" for fn in goal_file_names(goals, gid)]
+            # judge가 goals/INDEX.md에 붙인 이 골의 줄도 — 다른 골의 커밋 안 된 줄은 섞지 않는다(그 골 파일은 이 커밋에 없다)
+            idx, idx_full = f"{goals}/INDEX.md", None
+            if os.path.exists(idx):
+                head = subprocess.run(["git", "show", f"HEAD:{idx}"], capture_output=True).stdout.decode("utf-8")
+                cur = hindex.rd(idx)
+                mine = [l for l in hindex.lines_keep(cur) if l.startswith(f"- {gid} ") and l.rstrip() not in
+                        {x.rstrip() for x in head.splitlines()}]
+                if head and mine:
+                    idx_full = cur
+                    hindex.wr(idx, head + ("" if head.endswith("\n") else "\n") + "".join(mine))
+                    own.append(idx)
             vf_git.git("add", "--", *own)
             # 경로를 지정해 커밋: 미리 staged된 다른 변경은 섞지 않고 staged 그대로 둔다
             c = subprocess.run(["git", "commit", "-q", "-m", f"{gid} 착수: {task}", "--", *own],
                                capture_output=True, text=True, encoding="utf-8")
+            if idx_full is not None:
+                hindex.wr(idx, idx_full)   # 작업 트리는 원래대로(다른 골의 줄은 그 골 claim·등록 커밋에서)
             if c.returncode:
                 die(f"[claim] 선점 커밋 실패 (훅 거부 등) — push하지 않음:\n{(c.stdout + c.stderr).strip()}")
         if not remote:
@@ -759,7 +772,22 @@ def check_record(cfg, commit=None):
     gids = sorted(set(ID_RE.findall(msg)) | set(ID_RE.findall(branch)))
     miss = []
     work = [f for f in files if not f.startswith(hdir + "/") and not f.startswith(goals_dir + "/")]
-    if not work:
+    # 골 등록 커밋: judge --apply로 만든 새 골 파일을 claim 전에 올리는 커밋(초기 골 세트 등). 작업 파일·그 골의 MR은 요구하지 않고,
+    # 기록은 등록이 아닌 골 ID(보통 G-000)로 남긴다. judge CREATE 기록이 없는 골 파일은 등록이 아니다.
+    reg, hand = set(), []
+    for f in files:
+        m = re.match(rf"^{re.escape(goals_dir)}/(G-\d{{3,}})[^/]*\.md$", f)
+        if m and not vf_git.git("ls-tree", "--name-only", lo, "--", f):
+            j = hindex.field(vf_git.git("show", f"{hi}:{f}"), "judge") or ""
+            (reg.add(m.group(1)) if re.search(r"\bCREATE\b", j) else hand.append(f))
+    # 골 파일이 새로 생긴 커밋은 그 골의 완료 커밋일 수 없다(골 파일은 등록·claim 때 올라간다) — 작업 파일이 함께 있어도 완료 골에서 뺀다
+    if not work and hand:
+        miss += [f"{f}에 judge CREATE 기록 없음 — 골은 candidate → judge --apply로 만든다(손으로 쓴 골 파일은 등록 커밋이 아니다)" for f in hand]
+    elif reg:
+        gids = sorted(set(gids) - reg)
+        if not gids:
+            miss.append(f"골 등록 커밋({' '.join(sorted(reg))})에 기록을 남길 골 ID가 없음 — 메시지에 G-000을 넣는다")
+    if not work and not (reg and not hand):
         miss.append(f"{label}에 작업 파일 변경이 없음 — 기록은 작업과 같은 커밋에 넣는다(골 작업은 QA 뒤 git commit --amend로 합친다). "
                     "archive·기록만 따로 커밋했다면 git reset --soft HEAD^ 로 풀고 작업 커밋에 합친다")
     if not gids:
@@ -810,7 +838,8 @@ def check_record(cfg, commit=None):
         for x in miss:
             print(" -", x)
         sys.exit(1)
-    print(f"[check-record] 통과 — {label}: 작업 {len(work)}개 파일 + 핸드오프 기록")
+    print(f"[check-record] 통과 — {label}: " + (f"작업 {len(work)}개 파일" if work else "") + (" · " if work and reg else "")
+          + (f"골 등록 {len(reg)}개({' '.join(sorted(reg))})" if reg else "") + " + 핸드오프 기록")
 
 
 if __name__ == "__main__":
