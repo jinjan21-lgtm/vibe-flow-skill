@@ -623,6 +623,7 @@ def check(text, stage, cfg):
                 miss.append(f"설계 확인을 생략했지만 코드 변경이 {lines}줄·{files}파일로 커짐 — 코딩을 멈추고 review.py --design 필요")
     if i >= 2:
         miss += design_policy_problems(goal, cfg, s)
+        miss += design_major_problems(goal, cfg, s)
     if i >= 3 and profile(s) == "경량":
         hits = risk_code_hits(cfg)
         judged = re.search(r"^\s*[-*]?\s*위험 판단\s*:\s*(\S.{9,})$", s.get("영향·위험", ""), re.M)
@@ -662,7 +663,11 @@ def check(text, stage, cfg):
                             "완료 조건을 확인하는 자동 테스트를 두고 test_cmd에 넣는다")
         for did in mr_decision_ids(text):
             if simulated_block(decision_block(did, cfg)[1] or ""):
-                print(f"[state] SIMULATED-DECISION {did} — 시뮬레이션 결정(운영 승인 아님): 실제 결정자 확인 전 운영 배포 금지")
+                if cfg.get("rehearsal") is True:   # 리허설 레포(E2E)만 — 운영 레포에서는 실제 결정자 확인 전 merge를 열지 않는다
+                    print(f"[state] SIMULATED-DECISION {did} — 리허설 레포의 시뮬레이션 결정(운영 승인 아님)")
+                else:
+                    miss.append(f"SIMULATED-DECISION {did} — 시뮬레이션 결정은 운영 승인이 아니다: 실제 결정자가 결정 블록을 "
+                                "다시 적기 전 merge 불가(리허설 레포만 .vibe-flow.json \"rehearsal\": true)")
         miss += schema_problems(goal, cfg, s.get("QA 결과", ""))
         if profile(s) == "강화":
             ids, bad_lines = regression_ids(s.get("QA 결과", ""))
@@ -772,6 +777,22 @@ def design_policy_problems(goal, cfg, s):
     lack = [x for x in items if not any(_same(x, y) for y in listed)]
     return [f"설계 확인 POLICY 「{x}」가 MR 「영향·위험」 '- 미확인:'(또는 '- 정책 결정: D-nnn — {x}')에 없음 — 그대로 옮긴다(사람 결정 전 merge 차단)"
             for x in lack]
+
+
+def design_major_problems(goal, cfg, s):
+    """설계 확인이 CONFIRM이어도 그 회차의 blocker·major FINDING은 「설계 확인」에 '- 반영: <id> — <어떻게>' 또는
+    '- 넘김: <id> — 골 후보 <사유>'로 처리를 적어야 구현에 들어간다(진단 평가 C7)."""
+    got = latest_round("d", goal, cfg) if goal else None
+    if not got:
+        return []
+    dc = re.sub(r"<!--.*?-->", "", s.get("설계 확인", ""), flags=re.S)
+    done = set(re.findall(r"^\s*[-*]?\s*(?:반영|넘김)\s*:\s*([A-Za-z][A-Za-z0-9_-]*)\s*[—–:-]+\s*\S.{4,}$", dc, re.M))
+    # 2회 뒤 사람 판정 경로: '- 사람 결정: D-nnn — <ID…>'가 처리다(결정의 실재·골·회차는 위 설계 확인 검사가 본다)
+    for ids in re.findall(r"^\s*[-*]?\s*사람 결정\s*:\s*D-\d+\s*[—–:-]+\s*(.+)$", dc, re.M):
+        done.update(FID.findall(ids))
+    return [f"설계 확인 {x['sev']} {x['id']}가 처리되지 않음 — 「설계 확인」에 '- 반영: {x['id']} — <어떻게>' "
+            f"(또는 '- 넘김: {x['id']} — 골 후보 <사유>')"
+            for x in findings(got[2]) if x["sev"].lower() in ("blocker", "major") and x["id"] not in done]
 
 
 def regression_ids(qa):
@@ -1118,7 +1139,46 @@ def red_evidence(qa, gids=(), cfg=None):
     """표준·강화 merge: select_red가 고른 RED 기록이 있어야 한다."""
     if select_red(qa, gids, cfg):
         return []
+    if RED_ALT.search(_strip_comments(qa)):
+        bad = red_alt_problems(qa, cfg)
+        if not bad:
+            print("[state] RED-ALT — 동작 불변 변경: 바뀌지 않은 기존 테스트가 QA에서 ok(실패 재현 대신)")
+        return bad
     return ["RED 증거 없음 — 구현 전 qa_run.py --red --mr <MR> (표준·강화: 이 브랜치·골·기준에서 구현 전에 실패한 테스트가 QA 기록에서 ok여야 함)"]
+
+
+RED_ALT = re.compile(r"^\s*[-*]?\s*RED 대체\s*:\s*동작 불변\s*[—–:-]+\s*(\S.*)$", re.M)
+
+
+def _strip_comments(t):
+    return re.sub(r"<!--.*?-->", "", t or "", flags=re.S)
+
+
+def changed_test_files(cfg):
+    """기준 대비 지금 작업물에서 바뀐(추가 포함) 테스트 파일."""
+    base = vf_git.base_tree(cfg["base"])
+    names = vf_git.git("diff", "--name-only", base, vf_git.snapshot(), check=True).splitlines()
+    tests = {os.path.normpath(p) for p in _test_files()}
+    return [f for f in names if f and os.path.normpath(f) in tests]
+
+
+def red_alt_problems(qa, cfg):
+    """RED 대체(진단 평가 C7 — 설정·의존성·동작 불변 리팩터링은 실패 재현이 어색하다): 「QA 결과」
+    '- RED 대체: 동작 불변 — <기존 테스트 이름…>'. 이름 하나 이상이 레포에 있고 QA 기록에서 ok이며,
+    테스트 파일은 기준 대비 하나도 바뀌지 않아야 한다(바꾼 테스트로 동작 불변을 증명하지 않는다)."""
+    m = RED_ALT.search(_strip_comments(qa))
+    ids = test_ids(m.group(1)) if m else []
+    if not ids:
+        return ["RED 대체: '- RED 대체: 동작 불변 — <기존 테스트 이름>'에 테스트 이름이 없음"]
+    bad = [f"RED 대체: {t}가 레포 테스트 파일에 없음" for t in ids if not test_exists(t)]
+    try:
+        changed = changed_test_files(cfg)
+    except (RuntimeError, KeyError):
+        changed = ["(기준 비교 실패)"]
+    if changed:
+        bad.append(f"RED 대체는 테스트 파일이 그대로일 때만 — 바뀐 테스트 {', '.join(changed[:3])}(동작이 바뀌면 RED: qa_run.py --red --mr)")
+    bad += [x.replace("강화 프로필 — 회귀", "RED 대체") for x in regression_evidence(ids, qa)]
+    return bad
 
 
 def _old_schema(v):

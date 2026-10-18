@@ -323,3 +323,15 @@ E2E S6: 4건 모두 merge·`verify-evidence --run-tests` 통과(t4s2는 시뮬�
 | A19-01 잔여 | major | 사람 판정 설계 경로는 d1·d2 원문 형식을 다시 보지 않음 | 사람 판정 경로도 유효 d1·d2 원문 모두에 `design_problems` |
 | A20-01 | major | 토큰 정확 일치로 바꾸며 authorization·migrating 등을 놓침(회귀) | `RISK_STEMS` 접두어(auth·migrat·permiss·privileg·credential·passw·delet·payment·refund·billing) |
 | A20-02 | minor | 구문 검사 뒤 echo만 이어도 '구문 검사만'이 아님으로 판정 | 이어진 명령 중 테스트 러너가 없으면 구문 검사만 |
+
+**21차(S8 be0b166):** 열린 blocker·major 0. minor A20-02(부분)·A21-01(위험 토큰 과검출) 남음.
+
+**진단 평가 C7 감점 처리(S9)** — 감사 22로 재검토:
+
+| ID | 심각도 | 내용 | 처리 |
+|---|---|---|---|
+| C7-01 | 치명(평가) | 시뮬레이션 결정이 상태 표시만 하고 merge 통과 | merge 차단. `.vibe-flow.json` `"rehearsal": true`(리허설 레포)만 `[state]`로 통과 |
+| C7-02 | 평가 | 설계 확인 CONFIRM에 남은 major를 처리하지 않고 build | blocker·major마다 `- 반영:`/`- 넘김:`(2회 뒤 사람 판정은 `- 사람 결정:` ID) 없으면 build 차단 |
+| C7-03 | 평가 | 설정·리팩터링에도 RED 강제 | `- RED 대체: 동작 불변 — <기존 테스트>`: 이름 실재·QA ok·기준 대비 테스트 파일 무변경일 때만 |
+| C7-04 | 평가 | 팀 설치 예시 test_cmd(구문 검사)와 표준·강화 규칙 충돌, 브랜치 규칙 분산 | setup.md 용도 명시·테스트 러너 안내, SKILL.md 팀·개인 브랜치 |
+| T-01 | 테스트 | `test_crash_not_red`가 바뀐 안내 문구를 그대로 찾음(S8 전체 실행에서도 실패) | 의미(RED 아님·red 기록 없음)로 단언 |

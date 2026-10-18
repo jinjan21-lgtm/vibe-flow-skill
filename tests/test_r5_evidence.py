@@ -672,7 +672,9 @@ class QaRedCrashTest(QaRunRepo):
         write(self.d, "mr.md", "## 골\nG-001 거래처 검색\n## QA 결과\n(진행 전)\n")
         r = self.qa("--red", "--mr", "mr.md")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("RED 아님 — 실행 오류(테스트 실패가 아님)", r.stdout + r.stderr)
+        self.assertIn("RED 아님", r.stdout + r.stderr)   # 실패한 테스트 이름이 없는 출력(실행 오류)은 RED가 아니다
+        self.assertFalse([f for f in os.listdir(os.path.join(self.d, ".vibe", "qa")) if f.startswith("red-")]
+                         if os.path.isdir(os.path.join(self.d, ".vibe", "qa")) else [])
 
 
 if __name__ == "__main__":

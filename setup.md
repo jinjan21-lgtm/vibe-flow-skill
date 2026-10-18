@@ -30,6 +30,8 @@ cat > .vibe-flow.json <<'EOF'
 EOF
 ```
 
+이 `test_cmd`는 문서·프로토타입만 있는 파일럿 레포용(구문 검사)이다. 경량 골만 merge할 수 있다 — 표준·강화(위험 표식)는 구문 검사만으로 merge하지 않는다. 코드와 테스트가 있는 레포는 테스트 러너를 상세 출력으로 넣는다: `"test_cmd": "python -m unittest discover -v"`(구문 검사도 원하면 `&&`로 잇는다).
+
 `.gitattributes`에 `docs/handoff/WORKLOG/*.md merge=union`을 더한다(토픽 파일도 여러 사람이 줄을 추가함). `.gitignore`에 `.vibe/`를 더한다(MR 본문·리뷰 기록·이전 스냅숏 등 로컬 작업 파일 — 개인 레포도 같음). 각 참여자는 복제 후 한 번 `python .claude/skills/vibe-flow/scripts/goal_gate.py install-hook`을 실행한다(훅은 커밋되지 않는 로컬 설정).
 
 team-handoff `SKILL.md`, `CLAUDE.md`, `AGENTS.md`에는 골 ID 표기와 `handoff.py precheck/claim/check-record` 호출 지점을 넣는다 — 형식은 structure.md의 표 그대로.
