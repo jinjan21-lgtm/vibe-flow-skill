@@ -70,11 +70,19 @@ def conflict_note(base, other):
     return ""
 
 
-CLAIM_RE = re.compile(r"^\s*-\s*\[~\]\s*(.*?)\(착수\s*@(\S+)\s+(\d{4}-\d{2}-\d{2})\)(?:\s*→\s*(\S+))?", re.M)
+CLAIM_RE = re.compile(r"^\s*-\s*\[~\]\s*(.*?)\(착수\s*@(\S+)\s+(\d{4}-\d{2}-\d{2})\)(?:\s*→\s*(\S+))?"
+                      r"(?:\s*·\s*범위:\s*([^\n]*?))?[ \t]*$", re.M)
+SCOPE_RE = re.compile(r"\s*·\s*범위:.*$")
 
 
-def claims(cfg):
-    """REMAINING의 착수 표시 [(골 ID 집합, 할 일, 작성자, 날짜, 출처)]. 작업 트리 + 모든 브랜치 끝을 본다."""
+def scope_list(value):
+    """'범위:' 값 → 파일·폴더 경로 목록(쉼표 구분, 공백 제거, 빈 값 제외)."""
+    return [x.strip() for x in (value or "").split(",") if x.strip()]
+
+
+def claim_entries(cfg):
+    """REMAINING의 착수 표시 [{ids, task, who, date, branch, files, src}]. 작업 트리 + 모든 브랜치 끝을 본다.
+    같은 착수(할 일·작성자·날짜·브랜치)가 여러 곳에 있으면 범위가 공지된 쪽을 쓴다 — 범위는 골 브랜치에만 먼저 올라간다."""
     rem = f"{vf_git.paths(cfg)['handoff']}/REMAINING.md"
     texts = []
     if os.path.exists(rem):
@@ -86,15 +94,85 @@ def claims(cfg):
         t = vf_git.git("show", f"{ref}:{rem}")
         if t:
             texts.append((ref, t))
-    out, seen = [], set()
+    got = {}
     for src, t in texts:
         for m in CLAIM_RE.finditer(t):
             key = (m.group(1).strip(), m.group(2), m.group(3), m.group(4))  # 브랜치가 다르면 다른 착수
-            if key in seen:
+            files = scope_list(m.group(5))
+            if key in got and (got[key]["files"] or not files):
                 continue
-            seen.add(key)
-            task = m.group(1).strip() + (f" → {m.group(4)}" if m.group(4) else "")
-            out.append((set(ID_RE.findall(m.group(1))), task, m.group(2), m.group(3), src))
+            task = m.group(1).strip() + (f" → {m.group(4)}" if m.group(4) else "") + (f" · 범위: {', '.join(files)}" if files else "")
+            got[key] = {"ids": set(ID_RE.findall(m.group(1))), "task": task, "who": m.group(2), "date": m.group(3),
+                        "branch": m.group(4) or "", "files": files, "src": src}
+    return list(got.values())
+
+
+def claims(cfg):
+    """REMAINING의 착수 표시 [(골 ID 집합, 할 일, 작성자, 날짜, 출처)] — 할 일에 공지된 범위가 붙는다."""
+    return [(e["ids"], e["task"], e["who"], e["date"], e["src"]) for e in claim_entries(cfg)]
+
+
+def section(mr_text, name):
+    return (re.search(rf"^##\s+{name}\s*\n(.*?)(?=^##\s|\Z)", mr_text or "", re.M | re.S) or [None, ""])[1]
+
+
+def planned_files(mr_text):
+    """MR 「설계」 '바꿀 모듈·파일:' 줄의 경로. 백틱 안 값이 있으면 그것만, 없으면 경로처럼 생긴 낱말(확장자·'/' 포함)."""
+    m = re.search(r"^\s*[-*]?\s*바꿀 모듈·파일\s*:\s*(.+)$", section(mr_text, "설계"), re.M)
+    if not m:
+        return []
+    v = m.group(1)
+    found = re.findall(r"`([^`\s]+)`", v) or re.findall(r"(?<![\w./-])((?:[\w.-]+/)*[\w.-]*[\w-]\.\w{1,6}|(?:[\w.-]+/)+)(?![\w/])", v)
+    out = []
+    for f in found:
+        f = f.strip().lstrip("./") if f.startswith("./") else f.strip()
+        if f and f not in out:
+            out.append(f)
+    return out
+
+
+def path_hit(a, b):
+    """같은 파일이거나, 한쪽이 '/'로 끝나는 폴더이고 다른 쪽이 그 안에 있다."""
+    return a == b or (b.endswith("/") and a.startswith(b)) or (a.endswith("/") and b.startswith(a))
+
+
+def touched_files(cfg):
+    """지금 작업물이 기준 대비 바꾼 파일 — 핸드오프 기록·골·.vibe/ 는 뺀다(남의 범위와 겹침을 볼 코드·문서)."""
+    p = vf_git.paths(cfg)
+    skip = (p["handoff"].rstrip("/") + "/", p["goals"].rstrip("/") + "/", ".vibe/")
+    try:
+        files = vf_git.changed_files(vf_git.base_tree(cfg["base"]), vf_git.snapshot())
+    except (RuntimeError, KeyError):
+        return []
+    return [f for f in files if not f.startswith(skip)]
+
+
+ACK_RE = re.compile(r"^\s*[-*]?\s*겹침 확인\s*:\s*(G-\d{3,})\s*[—–-]+\s*\S", re.M)
+
+
+def scope_overlaps(mr_text, cfg, today=None):
+    """남이 공지한 착수 범위(7일 이내, 다른 골)와 내 계획(「설계」 바꿀 파일)·실제 변경 파일이 겹치면 차단 항목.
+    겹침을 알고 피하거나 조율했다는 기록 — 「영향·위험」 '- 겹침 확인: G-### — <어떻게>' — 이 있는 골은 통과."""
+    import datetime
+    my_ids = set(ID_RE.findall(section(mr_text, "골"))) - {"G-000"}
+    mine = list(dict.fromkeys(planned_files(mr_text) + touched_files(cfg)))
+    if not mine:
+        return []
+    acked = set(ACK_RE.findall(section(mr_text, "영향·위험")))
+    today = today or datetime.date.today()
+    days, me, out = cfg.get("claim_days", 7), vf_git.me(), []
+    for e in claim_entries(cfg):
+        if e["who"] == me or not e["files"] or e["ids"] & my_ids:
+            continue
+        if (today - datetime.date.fromisoformat(e["date"])).days > days:
+            continue
+        hit = [f for f in mine if any(path_hit(f, s) for s in e["files"])]
+        gids = sorted(e["ids"] - {"G-000"}) or sorted(e["ids"])
+        if not hit or (set(gids) & acked):
+            continue
+        g = gids[0] if gids else "G-###"
+        out.append(f"@{e['who']}가 {g}에서 {', '.join(hit[:5])}을(를) 바꾸는 중({e['branch'] or e['src']}) — 피하거나 조율하고 "
+                   f"「영향·위험」에 '- 겹침 확인: {g} — <어떻게 피하거나 조율할지>'")
     return out
 
 

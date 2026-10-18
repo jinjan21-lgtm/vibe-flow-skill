@@ -18,7 +18,9 @@ description: Use when a goal is claimed and the approach is not yet confirmed �
    - 작업 기록: WORKLOG INDEX에서 같은 골·토픽 줄의 앵커만.
    - UI가 닿으면 `docs/design-system.md`.
 2. 선점 브랜치에서 코드를 읽는다. 임시 코드는 버린다.
-3. MR 본문 「설계」 다섯 칸: 접근 방식 · 바꿀 모듈·파일 · 데이터·API 변경 · 대안과 선택 이유 · 테스트 계획. 개발 유형·영향 표식(UI·API·데이터·의존성)은 `docs/task-types.md`로. `--stage draft`.
+3. MR 본문 「설계」 다섯 칸: 접근 방식 · 바꿀 모듈·파일 · 데이터·API 변경 · 대안과 선택 이유 · 테스트 계획. 개발 유형·영향 표식(UI·API·데이터·의존성)은 `docs/task-types.md`로. 바꿀 파일은 `백틱` 경로로 적는다. `--stage draft`.
+   - **범위 공지:** `python $S/handoff.py scope G-### --mr <mr>` — 바꿀 파일을 내 착수 줄에 `· 범위: …`로 붙여 골 브랜치에 push. 동료의 precheck·중복 검사가 이 범위를 본다. build부터 설계 파일이, review부터 실제 바꾼 파일이 범위 안이어야 한다 — 늘면 다시 `scope`.
+   - **남의 범위와 겹치면** `--stage draft`가 막는다: 그 골을 피하도록 설계를 바꾸거나, 조율한 방법을 「영향·위험」 `- 겹침 확인: G-### — <어떻게>`로 적는다(머지 순서·리베이스·함수만 추가 등).
 4. 설계 확인: `python $S/review.py --design 1 --mr <mr>` → 「설계 확인」에 `- 확인 1: …`, `- 판정: 확정`. `POLICY:` 항목은 「영향·위험」 `- 미확인:`에 그대로. CONFIRM이어도 blocker·major FINDING마다 `- 반영: <id> — <어떻게>`(또는 `- 넘김: <id> — 골 후보 <사유>`). blocker가 남으면 `--design 2`. 2회 뒤에도 blocker면 `판정: 보류`, 사용자에게(REMAINING `- [ ] 결정: …`). 사용자가 결정하면 D-nnn(골 ID·blocker ID)으로 기록하고 `- 사람 결정: D-nnn — <blocker ID>`, `- 판정: 확정 (사람 판정 D-nnn)` — 3회차는 없다. 바뀐 설계는 「계획 vs 실제」로(`review-loop.md`).
 5. 작은 변경(기본 50줄·3파일, 기록 제외)은 **코딩 전에** `- 생략: 작은 변경 (예상 N줄·M파일)`(N·M이 기준 초과면 막힘). `- 위험:`·데이터·API 변경이 정확히 `없음`이 아니면 생략 불가(`없음(…)`도 위험). 강화 프로필은 「검증 계획」에 회귀 테스트 이름(`docs/task-types.md`). 생략 중엔 `--stage build`가 코드 크기도 본다 — 넘으면 멈추고 4번. 구현 뒤 확인이면 `- 순서: 구현 선행 (사유)`.
 6. `python $S/mr_check.py <mr> --stage build` 통과 → 다음은 **vibe-dev**.

@@ -6,6 +6,9 @@
                                                    + 착수 가능성(git·python(python·python3·py)·codex PATH, test_cmd — --run-tests면 실행).
                                                    git·python·codex·test_cmd가 없거나 추적 파일에 커밋 안 된 변경이 있으면 '착수 불가', 종료코드 1
   python handoff.py claim G-### "<할 일>" <브랜치> [--no-push]
+  python handoff.py scope G-### --mr <MR> [--no-push]
+                                                   범위 공지: 「설계」 바꿀 파일을 내 착수 줄에 '· 범위: …'로 붙여 골 브랜치에 커밋·push
+                                                   (동료 precheck·중복 검사가 보고 피하거나 「겹침 확인」으로 조율)
                                                    선점: fetch → 중복 검사 → 브랜치 → REMAINING 착수 줄 커밋 → push
   python handoff.py check-record [--commit <sha>]  완료 기록 검사: 그 커밋(기본 HEAD)에 작업 + WORKLOG·INDEX·REMAINING
                                                    + MR 본문(<핸드오프>/mr/G-###.md)·QA 실행 기록(G-###-qa.json: tree·cmd·
@@ -146,6 +149,8 @@ def precheck(cfg):
         print(f"  [~] {task} @{who} {date} ({src})")
     for ids, task, who, date, src in stale:
         print(f"  [~ 만료] {task} @{who} {date} — 다시 집을 수 있음")
+    if any("· 범위:" in c[1] and c[2] != me for c in active):
+        print("  ↳ 남의 「범위」 파일을 바꾸게 되면 피하거나 조율하고 MR 「영향·위험」에 '- 겹침 확인: G-### — <어떻게>' (mr_check가 draft부터 막는다)")
     rem = f"{hdir}/REMAINING.md"
     if os.path.exists(rem):
         pend = [l.strip() for l in read(rem).splitlines() if re.match(r"^\s*-\s*\[ \]\s*결정", l)]
@@ -294,6 +299,56 @@ def claim(cfg, gid, task, branch, push=True):
         print("[claim] push 거부 — 최신으로 갱신하고 중복을 다시 검사합니다")
         vf_git.git("pull", "-q", "--rebase", "origin", cfg["base"])
     die("[claim] push가 두 번 실패 — 사용자에게 보고하세요")
+
+
+def scope(cfg, gid, mr_path, push=True):
+    """범위 공지: MR 「설계」 바꿀 파일을 이 골의 내 착수 줄 끝에 '· 범위: a, b'로 붙인다(이전 범위는 바꾼다).
+    커밋은 착수 줄 한 줄만 — 마지막 커밋의 REMAINING에서 그 줄만 바꿔 올리고, 작업 트리의 다른 미커밋 변경은 섞지 않는다.
+    원격 모드면 골 브랜치에 push한다. 로컬에만 있는 다른 커밋이 함께 올라가게 되면 멈춘다(push는 사용자가 정한다)."""
+    import dupe
+    mode, hdir, _ = detect(cfg)
+    me, cur = vf_git.me(), vf_git.current_branch()
+    if not ID_RE.fullmatch(gid):
+        die(f"[scope] 골 ID 형식이 아님: {gid}")
+    if not has_id(gid, cur):
+        die(f"[scope] 지금 브랜치 {cur} 이름에 {gid}가 없음 — 골 브랜치에서 공지한다")
+    files = dupe.planned_files(read(mr_path))
+    if not files:
+        die("[scope] MR 「설계」 '바꿀 모듈·파일:'에 파일 경로가 없음 — 경로를 `백틱`으로 적는다")
+    rem = f"{hdir}/REMAINING.md"
+    mine = re.compile(rf"^\s*-\s*\[~\]\s*.*(?<![\w-]){re.escape(gid)}(?![\w-]).*\(착수\s*@{re.escape(me)}\s+\d{{4}}-\d{{2}}-\d{{2}}\).*$", re.M)
+    head = subprocess.run(["git", "show", f"HEAD:{rem}"], capture_output=True).stdout.decode("utf-8")
+    if not mine.search(head):
+        die(f"[scope] 커밋된 REMAINING에 내 착수 줄([~] {gid} … 착수 @{me})이 없음 — handoff.py claim 먼저")
+    tail = " · 범위: " + ", ".join(files)
+    put = lambda t: mine.sub(lambda m: dupe.SCOPE_RE.sub("", m.group(0).rstrip()) + tail, t, count=1)
+    new_head = put(head)
+    remote = has_remote(cfg) and push
+    if remote:
+        vf_git.git("fetch", "-q", "origin")
+        if vf_git.git("rev-parse", "--verify", "-q", f"origin/{cur}"):
+            extra = vf_git.git("rev-list", "--count", f"origin/{cur}..HEAD")
+            if extra and int(extra):
+                die(f"[scope] 로컬에만 있는 커밋 {extra}개가 범위 공지와 함께 push됨 — 사용자에게 확인한 뒤 push하거나 --no-push")
+    if new_head != head:
+        work = read(rem) if os.path.exists(rem) else head
+        write(rem, new_head)
+        vf_git.git("add", "--", rem)
+        c = subprocess.run(["git", "commit", "-q", "-m", f"{gid} 범위 공지: {files[0]}" + (f" 외 {len(files) - 1}" if len(files) > 1 else ""),
+                            "--", rem], capture_output=True, text=True, encoding="utf-8")
+        write(rem, put(work))   # 작업 트리는 다른 미커밋 변경을 살리고 착수 줄만 바꾼다
+        if c.returncode:
+            die(f"[scope] 범위 공지 커밋 실패:\n{(c.stdout + c.stderr).strip()}")
+    else:
+        print("[scope] 범위가 이미 같음 — 커밋하지 않음")
+    if not remote:
+        print(f"[scope] 범위 공지 커밋({'로컬 모드' if not has_remote(cfg) else '--no-push — push 안 함'}): {', '.join(files)}")
+        return
+    vf_git.git("push", "-q", "-u", "origin", cur)
+    vf_git.git("fetch", "-q", "origin")
+    if vf_git.git("rev-parse", f"origin/{cur}") != vf_git.git("rev-parse", "HEAD"):
+        die("[scope] push 확인 실패 — 사용자에게 보고하세요")
+    print(f"[scope] 범위 공지 완료 — push 확인됨: origin/{cur} · 범위: {', '.join(files)}")
 
 
 # ---------- check-record ----------
@@ -855,6 +910,8 @@ if __name__ == "__main__":
         sys.exit(readiness(cfg, run_tests="--run-tests" in a))
     elif a[:1] == ["claim"] and len(a) >= 4:
         claim(cfg, a[1], a[2], a[3], push="--no-push" not in a)
+    elif a[:1] == ["scope"] and len(a) >= 4 and a[2] == "--mr":
+        scope(cfg, a[1], a[3], push="--no-push" not in a)
     elif a[:1] == ["check-record"]:
         check_record(cfg, a[2] if len(a) > 2 and a[1] == "--commit" else None)
     elif a[:1] == ["export-evidence"] and len(a) == 2:

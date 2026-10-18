@@ -13,12 +13,13 @@ vibe-flow의 첫 단계. 규칙 원본은 vibe-flow 폴더(팀 `.claude/skills/v
 
 1. `python $S/handoff.py precheck` — 첫 줄에 원격 여부가 나온다. 원격 모드면 `git pull` 뒤 다시, 로컬 모드면 pull 없이. 출력의 **읽을 순서만** 읽는다(INDEX들). 결정·작업 기록 본문은 열지 않는다.
    `착수 불가`(codex·`test_cmd` 없음, 커밋 안 된 변경)면 멈추고 사용자에게 보인다. 기준 테스트는 `--run-tests`로만.
-2. 이어 갈 착수·보류·결정 대기·후보가 있으면 먼저 보인다.
+2. 이어 갈 착수·보류·결정 대기·후보가 있으면 먼저 보인다. 남의 착수에 붙은 `범위:`(바꾸는 파일)는 골을 고를 때 피하거나, 겹치면 설계에서 `- 겹침 확인`으로 조율한다.
 3. 골: `python $S/goal_gate.py list`. 맞는 활성 골이 없으면 `candidate "<제목>"` → 네 칸 채우기 → `judge <후보> --apply`. 판정(CREATE/REJECT/MERGE)을 따른다. 노스스타가 draft면 판정이 거부된다 — 사용자 확정을 요청하고 멈춘다.
    - 골 여러 개를 미리 깔 때(초기 세트): judge 뒤 claim 없이 G-000 커밋 하나에 골 파일·goals INDEX·기록 — check-record가 「골 등록」으로 본다.
 4. 선점: `python $S/handoff.py claim G-### "<할 일>" <접두사>/G-###-<주제>`. 중복이면 멈추고 합류·골 나누기를 사용자에게 묻는다.
    - 원격 모드: push 확인 메시지가 나와야 선점이다. push 실패를 로컬 커밋으로 대신하지 않는다 — `--no-push`는 사용자 지시일 때만.
    - 로컬 모드(origin 없음·`"remote": false`): 로컬 커밋만 하고 `선점(로컬 모드 — 원격 없음): <브랜치>@<sha>`. 모드는 스크립트가 정한다.
+   - 선점 줄에는 골·할 일만 있다. 무엇을 바꾸는지는 설계 뒤 `handoff.py scope`로 공지한다(vibe-design).
 5. 선점 뒤 MR 본문 `.vibe/mr-G-###.md`(`templates/mr-body.md`)의 「골」만 채우고 `python $S/mr_check.py <mr> --stage claim`.
 
 통과하면 다음은 **vibe-design**(탐색·설계). 단독 호출이면 여기서 끝내고 다음 단계를 한 줄로 알린다.

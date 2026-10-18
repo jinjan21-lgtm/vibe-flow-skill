@@ -547,6 +547,9 @@ def check(text, stage, cfg):
             print("[dupe] 경고:", w)
     goal = ",".join(sorted(set(gids)))
     if i >= 1:
+        import dupe
+        miss += dupe.scope_overlaps(text, cfg)     # 남이 공지한 착수 범위와 겹침 — draft부터 merge까지 매번
+        miss += scope_problems(text, stage, cfg)   # 내 범위 공지 — build부터
         miss += [f"「{n}」 비어 있음" for n in DRAFT if not filled(s, n)]
         if filled(s, "완료 조건"):
             prose = completion_prose(text)
@@ -727,8 +730,45 @@ def syntax_only_cmd(cmd):
     (A19-04: 테스트를 잇는 명령은 막지 않는다, A20-02: 'echo' 같은 것만 이어도 구문 검사만이다)."""
     if "syntax_check" not in cmd:
         return False
+    # node로 테스트 파일(*.test.js·*.spec.mjs …)을 직접 돌리거나 node --test 도 테스트 실행이다 — node build.js 같은 것은 아니다
     return not re.search(r"\b(?:unittest|pytest|jest|vitest|mocha|ava|tap|nose2?|tox|go\s+test|cargo\s+test|"
-                         r"(?:npm|pnpm|yarn)\s+(?:run\s+)?test|phpunit|rspec|gradle\w*\s+test|mvn\s+test|dotnet\s+test)\b", cmd)
+                         r"(?:npm|pnpm|yarn)\s+(?:run\s+)?test|phpunit|rspec|gradle\w*\s+test|mvn\s+test|dotnet\s+test|"
+                         r"node\s+(?:--test|\S+\.(?:test|spec)\.[cm]?[jt]sx?))(?![\w.-])", cmd)
+
+
+def scope_problems(text, stage, cfg):
+    """내 선점 범위 공지: 이 골의 내 착수 줄([~] … @나)이 있으면, 공지된 범위(원격 모드는 origin/<브랜치>의 REMAINING)가
+    build부터 「설계」 바꿀 파일을, review부터 실제로 바꾼 파일(기록 제외)도 덮어야 한다 — 동료가 그 범위를 보고 피하거나 조율한다.
+    착수 줄이 없으면(선점 흐름을 안 쓴 개인 레포 등) 검사하지 않는다."""
+    import dupe
+    gids = sorted(set(re.findall(r"\bG-\d{3,}\b", dupe.section(text, "골"))) - {"G-000"})
+    if not gids or STAGES.index(stage) < 2:
+        return []
+    gid, me, cur = gids[0], vf_git.me(), vf_git.current_branch()
+    rem = f"{vf_git.paths(cfg)['handoff']}/REMAINING.md"
+    mine = re.compile(rf"^\s*-\s*\[~\]\s*.*(?<![\w-]){re.escape(gid)}(?![\w-]).*\(착수\s*@{re.escape(me)}\s+\d{{4}}-\d{{2}}-\d{{2}}\).*$", re.M)
+    try:
+        with open(rem, encoding="utf-8") as f:
+            local = f.read()
+    except OSError:
+        return []
+    if not mine.search(local):
+        return []
+    remote = cfg.get("remote", True) is not False and "origin" in vf_git.git("remote").split()
+    if not remote:
+        return []   # 로컬 모드(원격 없음)는 범위를 볼 동료가 없다 — 공지를 요구하지 않는다(scope는 로컬 커밋으로 쓸 수는 있다)
+    where = f"origin/{cur}"
+    m = mine.search(vf_git.git("show", f"{where}:{rem}") or "")
+    sm = re.search(r"·\s*범위:\s*(.*)$", m.group(0)) if m else None
+    files = dupe.scope_list(sm.group(1)) if sm else []
+    how = f"python handoff.py scope {gid} --mr <MR> — 「설계」 바꿀 파일을 착수 줄에 붙여 push"
+    if not files:
+        return [f"선점 범위 공지 없음({where}의 착수 줄) — {how}. 동료가 범위를 보고 피하거나 조율한다"]
+    need = dupe.planned_files(text)
+    if STAGES.index(stage) >= 3:
+        need += [f for f in dupe.touched_files(cfg) if not is_record(f, cfg)]
+    out = [f for f in dict.fromkeys(need) if not any(dupe.path_hit(f, s) for s in files)]
+    return [f"공지 범위 밖 파일: {', '.join(out[:5])}{' …' if len(out) > 5 else ''} — {how}(범위를 다시 공지)"] if out else []
 
 
 def risk_code_hits(cfg):

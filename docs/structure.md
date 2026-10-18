@@ -46,6 +46,7 @@
 |---|---|---|
 | 사전체크 | 읽을 순서대로 읽기, 다른 참여자 변경 요약, 7일 이내 착수 표시·결정 대기·보류·후보 확인 | `handoff.py precheck` |
 | 선점 | fetch → 중복 검사 → 브랜치 → REMAINING 착수 줄 커밋 → push → **push 성공 확인 후에만 탐색** (거부 시 rebase 후 중복 재검사). 로컬 모드(`origin` 없음 또는 `"remote": false`)는 로컬 커밋만 — `선점(로컬 모드 — 원격 없음): <브랜치>@<sha>` | `handoff.py claim G-### "<할 일>" <브랜치>` |
+| 범위 공지 | 설계의 바꿀 파일을 착수 줄에 `· 범위: a, b`로 붙여 골 브랜치에 커밋·push(그 한 줄만, 로컬에만 있는 다른 커밋이 같이 올라가면 멈춤). 동료 precheck가 범위를 보여 주고, 동료의 계획·변경 파일이 겹치면 mr_check가 draft부터 막는다 — 「영향·위험」 `- 겹침 확인: G-### — <조율>`로 푼다. 내 MR은 build부터 설계 파일, review부터 실제 변경 파일이 범위 안이어야 한다 | `handoff.py scope G-### --mr <MR>` |
 | 구현·리뷰·QA | 기록 없음 (진행 상황의 원천은 PR/MR) | - |
 | 보류·무인 멈춤 | REMAINING에 `- [ ] 결정: …` 또는 보류 사유 + PR 링크 | - |
 | QA 뒤, 머지 전 | WORKLOG 토픽 항목 + INDEX 한 줄 + REMAINING `[x]` + MR 본문 사본 `<핸드오프>/mr/G-###.md`(「리뷰 기록」·「QA 결과」 포함)를 **작업과 같은 커밋**에. QA 결과를 보고 쓰므로 마지막 작업 커밋에 합친다(`git commit --amend`, 이미 push했으면 자기 브랜치에 `--force-with-lease`). 머지 검사는 QA 대상 커밋 이후 기록·골 파일만 바뀐 것을 허용한다 | `handoff.py check-record` (HEAD 한 커밋) |
