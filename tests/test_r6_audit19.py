@@ -78,5 +78,22 @@ class SyntaxOnlyCmdTest(unittest.TestCase):
         self.assertFalse(mr_check.syntax_only_cmd("python -m unittest -v"))
 
 
+
+class Audit20Test(unittest.TestCase):
+    """20차: A20-01 위험 토큰 회귀(authorization·migrating 등 접두어), A20-02 구문 검사 뒤 echo만 잇는 명령."""
+
+    def test_stems(self):
+        import mr_check
+        for line in ("def authorization_check(user):", "authorizer = x", "migrating_users()", "migrations = []",
+                     "authenticator = a", "user_privileges = p"):
+            self.assertTrue(mr_check.risk_tokens(line), line)
+
+    def test_syntax_then_echo_is_still_syntax_only(self):
+        import mr_check
+        self.assertTrue(mr_check.syntax_only_cmd("python scripts/syntax_check.py src && echo done"))
+        self.assertFalse(mr_check.syntax_only_cmd("python scripts/syntax_check.py src && npm test"))
+        self.assertFalse(mr_check.syntax_only_cmd("python scripts/syntax_check.py src; python -m unittest -v"))
+
+
 if __name__ == "__main__":
     unittest.main()

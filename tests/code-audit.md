@@ -313,3 +313,13 @@ E2E S5: 4건 모두 merge·`verify-evidence --run-tests` 통과(2건은 시뮬�
 | S6-E1 | E2E t4s2 | 설계 POLICY 항목을 테스트 이름 '해소'로 닫을 수 있었음(에이전트는 사람 결정 몫이라 쓰지 않고 보고) | 설계 POLICY 항목은 정책 결정으로만 닫힘(`verification_states(design_items=…)`) |
 
 E2E S6: 4건 모두 merge·`verify-evidence --run-tests` 통과(t4s2는 시뮬레이션 정책 결정 뒤). 숨은 테스트 통과.
+
+| 20차 (S7 219c7ad) | A19-02·03·04·S6-E1 해소, A19-01 부분(사람 판정 설계 경로) | A20-01 (major) · A20-02 (minor) | 아래 |
+
+### 20차 처리 (tests/test_r6_audit19.py Audit20Test — 실패 확인 뒤 수정)
+
+| ID | 심각도 | 내용 | 처리 |
+|---|---|---|---|
+| A19-01 잔여 | major | 사람 판정 설계 경로는 d1·d2 원문 형식을 다시 보지 않음 | 사람 판정 경로도 유효 d1·d2 원문 모두에 `design_problems` |
+| A20-01 | major | 토큰 정확 일치로 바꾸며 authorization·migrating 등을 놓침(회귀) | `RISK_STEMS` 접두어(auth·migrat·permiss·privileg·credential·passw·delet·payment·refund·billing) |
+| A20-02 | minor | 구문 검사 뒤 echo만 이어도 '구문 검사만'이 아님으로 판정 | 이어진 명령 중 테스트 러너가 없으면 구문 검사만 |

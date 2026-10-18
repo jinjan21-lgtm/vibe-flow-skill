@@ -581,6 +581,13 @@ def check(text, stage, cfg):
                 else:
                     miss += decision_cover(human.group(1), dc, {x["id"]: ("blocker", 2) for x in blockers(drounds[-1][1])},
                                            cfg, "설계 확인")
+                # 사람이 정하는 것은 지적의 처리이지 검토 증거가 아니다 — d1·d2 원문도 같은 형식 규칙(A19-01 잔여)
+                import review as _rv
+                for dn_, dtext_ in drounds:
+                    bad = _rv.design_problems(dtext_)
+                    if bad:
+                        miss.append(f"설계 확인 원문 d{dn_}.txt가 지금 형식이 아님(요소별 CHECKED·POLICY): {'; '.join(bad[:3])} — "
+                                    "review.py --design 다시")
         if confirmed and not human:
             # MR 문구가 아니라 Codex 출력이 판정이다 — 최근 d<N>.txt가 CONFIRM이고 blocker가 없어야 한다
             why = round_not_confirmed("d", goal, cfg)
@@ -691,6 +698,8 @@ RISK_WORDS = {"price", "amount", "tax", "discount", "refund", "payment", "charge
               "money", "currency", "auth", "authn", "authz", "authorize", "authentication", "login", "password", "passwd",
               "token", "secret", "permission", "permissions", "role", "roles", "admin", "delete", "drop", "truncate",
               "migrate", "migration", "purge"}   # 흔한 단어(total·remove)는 빼서 잡음을 줄인다
+# 접두어로 보는 위험 어간 — authorization·authenticator·migrating·permissions·privileges 등(A20-01: 정확 일치만 보면 놓친다)
+RISK_STEMS = ("auth", "migrat", "permiss", "privileg", "credential", "passw", "delet", "payment", "refund", "billing")
 RISK_KO = re.compile(r"금액|요금|세금|할인|환불|결제|권한|인증|비밀번호|삭제")
 
 
@@ -700,15 +709,19 @@ def risk_tokens(line):
     for ident in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", line or ""):
         for part in ident.split("_"):
             for tok in re.findall(r"[A-Z]+(?=[A-Z][a-z]|\b|\d)|[A-Z]?[a-z]+|\d+", part):
-                if tok.lower() in RISK_WORDS:
+                if tok.lower() in RISK_WORDS or tok.lower().startswith(RISK_STEMS):
                     out.add(tok.lower())
     out.update(m.group(0) for m in RISK_KO.finditer(line or ""))
     return out
 
 
 def syntax_only_cmd(cmd):
-    """test_cmd가 구문 검사(syntax_check)만 하는가 — 뒤에 다른 명령을 잇는(&&·;·||) 경우는 아니다(A19-04)."""
-    return "syntax_check" in cmd and not re.search(r"&&|\|\||;", cmd)
+    """test_cmd가 구문 검사(syntax_check)만 하는가 — 이어 붙인 명령 중 테스트 러너가 하나도 없으면 구문 검사만이다
+    (A19-04: 테스트를 잇는 명령은 막지 않는다, A20-02: 'echo' 같은 것만 이어도 구문 검사만이다)."""
+    if "syntax_check" not in cmd:
+        return False
+    return not re.search(r"\b(?:unittest|pytest|jest|vitest|mocha|ava|tap|nose2?|tox|go\s+test|cargo\s+test|"
+                         r"(?:npm|pnpm|yarn)\s+(?:run\s+)?test|phpunit|rspec|gradle\w*\s+test|mvn\s+test|dotnet\s+test)\b", cmd)
 
 
 def risk_code_hits(cfg):
