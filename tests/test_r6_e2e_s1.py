@@ -34,12 +34,12 @@ class ItemSplitTest(unittest.TestCase):
 
 
 class JsSemicolonTest(unittest.TestCase):
-    """A14(A13-02 잔여): JS 이름 속 ';'에서도 자르지 않는다. 여러 식별자는 다음 JS 식별자 시작으로 나눈다."""
+    """A14(A13-02 잔여): JS 이름 속 ';'에서도 자르지 않는다. 한 줄에 JS 식별자는 하나 — 여럿이면 줄을 나눈다(A15-02)."""
 
     def test_semicolon_in_name(self):
         import mr_check
         self.assertEqual(mr_check.test_ids("src/app.test.ts › Suite › handles A; B"), ["src/app.test.ts › Suite › handles A; B"])
-        self.assertEqual(mr_check.test_ids("src/a.test.ts › x › y; src/b.test.ts › z (src/b.ts:3)"),
+        self.assertEqual(mr_check.test_ids("src/a.test.ts › x › y\nsrc/b.test.ts › z (src/b.ts:3)"),
                          ["src/a.test.ts › x › y", "src/b.test.ts › z"])
 
 

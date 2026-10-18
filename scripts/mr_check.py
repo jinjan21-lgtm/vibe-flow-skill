@@ -638,7 +638,7 @@ def check(text, stage, cfg):
             miss += red_evidence(s.get("QA 결과", ""), gids, cfg)
         miss += schema_problems(goal, cfg, s.get("QA 결과", ""))
         if profile(s) == "강화":
-            ids = test_ids(line_value(s.get("QA 결과", ""), "회귀"))
+            ids = regression_ids(s.get("QA 결과", ""))
             if not ids:
                 miss.append("강화 프로필 — 「QA 결과」에 '- 회귀: <돌린 회귀 테스트 이름>' 줄 필요"
                             "(test_x · Class.test_x · tests/x.py::name)")
@@ -650,13 +650,19 @@ def check(text, stage, cfg):
     return miss
 
 
+def regression_ids(qa):
+    """「QA 결과」 '- 회귀:' 줄들(여럿 가능 — JS 식별자는 한 줄에 하나)의 테스트 식별자, 안내 주석 밖만."""
+    qa = re.sub(r"<!--.*?-->", "", qa or "", flags=re.S)
+    return [t for v in re.findall(r"^\s*[-*]?\s*회귀\s*:(.*)$", qa, re.M) for t in test_ids(re.sub(r"<[^>\n]+>", "", v))]
+
+
 TEST_ID = re.compile(r"(?<![\w./\\-])(?:[\w./\\-]+\.py::\w+(?:::\w+)*|(?:[\w.-]+[/\\])*tests?[/\\][\w./\\-]*\.py"
                      r"|(?:[A-Za-z_]\w*\.)*test_\w+)(?![\w./\\-])")
 
 
 # JS 테스트 식별자(A11-01·12차): qa_run.parse_tests와 같은 모양 — jest '파일 › 묶음 › 이름', vitest '파일 > 묶음 > 이름'.
-# JS 테스트 이름에는 공백·쉼표·괄호가 들어갈 수 있다 — 중간에서 자르지 않는다(A13-02): 식별자는 파일부터 그 칸(';'·줄 끝으로
-# 나눈 칸) 끝까지, 끝의 '(파일:줄)' 하나만 뗀다. 한 칸에 JS 식별자는 하나(여럿이면 ';'로 나눈다)
+# JS 테스트 이름에는 공백·쉼표·괄호·';'가 들어갈 수 있다 — 중간에서 자르지 않는다(A13-02·A15-02): 한 줄에 JS 식별자는 하나,
+# 파일부터 줄 끝까지에서 끝의 '(파일:줄)' 하나만 뗀다(여럿이면 줄을 나눈다 — CHECKED는 조건마다 한 줄, '- 회귀:'는 줄 여럿)
 JS_TEST_START = re.compile(r"(?<![\w./\\-])[\w./\\-]+\.(?:test|spec)\.[cm]?[jt]sx?\s*[›>]")
 JS_TRAIL_REF = re.compile(r"\s*\(\s*[\w./\\-]+\.[A-Za-z0-9]+:\d+(?:-\d+)?\s*\)\s*$")
 JS_TEST_FILE = re.compile(r"\.(?:test|spec)\.[cm]?[jt]sx?$")
@@ -680,16 +686,13 @@ def test_ids(value):
             rest.append(line)
             continue
         rest.append(line[:starts[0]])
-        # JS 이름에는 ';'·','·괄호가 들어갈 수 있다(A14 — A13-02 잔여): 한 식별자는 다음 JS 식별자 시작 전까지(그 사이 구분자만 뗌),
-        # 줄의 마지막 식별자는 줄 끝까지에서 끝의 '(파일:줄)' 하나만 뗀다
-        for i, a in enumerate(starts):
-            seg = line[a:starts[i + 1]] if i + 1 < len(starts) else line[a:]
-            if i + 1 < len(starts):
-                seg = re.sub(r"[\s,;]+$", "", seg)
-            ref = JS_TRAIL_REF.search(seg)
-            js.append((seg[:ref.start()] if ref else seg).strip())
-            if ref:
-                rest.append(ref.group(0))
+        # 한 줄의 JS 식별자는 하나(A15-02): 이름에는 ';'·','·괄호는 물론 다른 식별자처럼 보이는 문자열도 들어갈 수 있어
+        # 어디서 끊어도 다른 테스트로 바뀔 수 있다 — 첫 시작부터 줄 끝까지, 끝의 '(파일:줄)' 하나만 뗀다. 여럿이면 줄을 나눈다
+        seg = line[starts[0]:]
+        ref = JS_TRAIL_REF.search(seg)
+        js.append((seg[:ref.start()] if ref else seg).strip())
+        if ref:
+            rest.append(ref.group(0))
     # '파일:줄'(코드 위치)은 테스트 이름이 아니다 — 'test_x (tests/test_a.py:62)'의 경로를 이름으로 뽑지 않는다(E2E S1-E1)
     return js + TEST_ID.findall(CODE_REF.sub(" ", " ; ".join(rest)))
 
@@ -919,13 +922,15 @@ ITEM_SPLIT = r"[;；]"   # 항목 구분은 ';' — 자연어 항목 속 쉼표�
 
 
 def _items(val):
-    """'항목, 항목' 값의 항목들. 정확히 '없음'이면 [] — 비었거나 자리표시(<…>)뿐이면 None(값이 없다 = 판정 불가)."""
+    """'항목; 항목' 값의 항목들. 정확히 '없음'이면 []. 먼저 나눈 뒤 항목마다 본다 — 빈 항목이나 자리표시(<…>)가 하나라도
+    있으면 None(값이 없다 = 판정 불가, 그 줄 자체가 미결). 자리표시를 먼저 지우면 '정책 A; <정책 B>'의 B가 사라진다(A15-01)."""
     raw = (val or "").strip()
     if _none(raw):
         return []
-    val = re.sub(r"<[^>\n]*>", "", raw).strip()
-    items = [x.strip() for x in re.split(ITEM_SPLIT, val) if x.strip()]
-    return items or None
+    items = [x.strip() for x in re.split(ITEM_SPLIT, raw)]
+    if not raw or any(not x or re.search(r"<[^>\n]*>", x) for x in items):
+        return None
+    return items
 
 
 def _norm_item(x):
