@@ -31,7 +31,7 @@ description: Use when a goal (G-###) MR has passed QA and its handoff records mu
 2. 골 작업: 마지막 작업 커밋에 합친다 — `git commit --amend`(이미 push했으면 자기 브랜치에 `--force-with-lease`).
 3. `check-record`(사본 검사) → `verify-evidence`(커밋 증거로 merge 검사 재연 + `--run-tests`. 0만 통과) → `lint`(모두 `python $S/handoff.py`). lint가 출력한 빠진 INDEX 줄은 그대로 붙인다.
 4. 골 작업: `python $S/mr_check.py <mr> --stage merge` 통과 뒤 머지는 작성자가(사용자 요청 시). 머지 후 골 `done`은 base에서, main 직접 커밋이 금지면 `chore/G-###-done` PR로(골 파일 + goals/INDEX.md).
-5. 크기는 직접 재지 않는다(임계값은 문자 수). lint·precheck·`archive --dry`가 임계값·완료 잔존을 알리면 **다음 작업 커밋에서 기록 전에** `handoff.py archive`(기록 뒤면 방금 쓴 `[x]`까지 옮겨진다).
+5. 크기는 직접 재지 않는다(임계값은 문자 수). lint·precheck·`archive --dry`가 임계값·완료 잔존을 알리면 **다음 작업 커밋에** `handoff.py archive`를 함께 넣는다 — 이동만 담은 커밋은 만들지 않는다(check-record가 막는다, 이미 했으면 `git reset --soft HEAD^`로 풀어 합친다). 이번 골의 방금 쓴 `[x]`는 archive가 남긴다.
 
 ## Red Flags
 

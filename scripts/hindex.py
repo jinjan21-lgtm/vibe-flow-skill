@@ -651,7 +651,10 @@ def archive(cfg, dry=False):
     acts = []
     if os.path.exists(L["remaining"]):
         ls = lines_keep(rd(L["remaining"]))
-        blocks = done_blocks(ls)
+        fresh = fresh_done_lines(L["remaining"])   # 이번 골의 방금 쓴 [x]는 남긴다 — 기록 전·후 어느 쪽에 돌려도 같은 커밋에 합칠 수 있게
+        blocks = [b for b in done_blocks(ls) if ls[b[0]] not in fresh]
+        if fresh:
+            acts.append(f"REMAINING 이번 골 완료 {len(fresh)}건은 남김(check-record가 이 커밋에서 찾는다)")
         if blocks:
             acts.append(f"REMAINING 완료 {len(blocks)}건 → REMAINING-done-YYYY-MM.md")
             if not dry:
@@ -730,9 +733,13 @@ def replaced_set(rows):
 
 
 # ---------- lint ----------
+# archive는 이동만 담은 커밋을 만들지 않는다 — 다음 작업 커밋에 함께(check-record는 작업 파일 없는 커밋을 막는다)
+ARCHIVE_HINT = "다음 작업 커밋에서 handoff.py archive (이동만 담은 커밋은 만들지 않는다)"
+
+
 def fresh_done_lines(rem):
     """방금 쓴 완료 줄: HEAD^의 REMAINING에 없고(이번 기록 커밋이나 amend 전 작업 트리에서 추가)
-    줄의 골 ID가 HEAD 메시지나 지금 브랜치에 있다. archive는 다음 작업 커밋에서 기록 쓰기 전에 하므로 경고하지 않는다."""
+    줄의 골 ID가 HEAD 메시지나 지금 브랜치에 있다. archive는 다음 작업 커밋에서 기록 쓰기 전에 하므로 경고하지 않고, archive도 옮기지 않는다."""
     ids = set(re.findall(r"\bG-\d{3,}\b", vf_git.git("log", "-1", "--format=%s%n%b") + " " + vf_git.current_branch()))
     if not ids or not os.path.exists(rem):
         return set()
@@ -778,7 +785,7 @@ def lint(cfg):
             if len(DEC_HEAD_RE.findall(last)) > ic["decisions_per_file"] or len(last) > ic["body_max_chars"]:
                 warn.append(f"{os.path.basename(bs[-1])}가 임계값({ic['decisions_per_file']}건·{ic['body_max_chars']}자) 초과 — 다음 결정은 새 본문 파일(next-id가 안내)")
         if len(keys) > ic["decisions_index_lines"]:
-            warn.append(f"결정 INDEX {len(keys)}줄 > {ic['decisions_index_lines']} → handoff.py archive (대체된 줄 이동)")
+            warn.append(f"결정 INDEX {len(keys)}줄 > {ic['decisions_index_lines']} → " + ARCHIVE_HINT + " — 대체된 줄 이동")
     # 섹션형(PLAN·NORTHSTAR)
     for key in ("plan", "northstar"):
         p = L[key]
@@ -818,14 +825,14 @@ def lint(cfg):
                 if f"#{m.group(1)})" not in it and f"#{m.group(1)}]" not in it:
                     err.append(f"WORKLOG {os.path.basename(tp)}#{m.group(1)}가 INDEX에 없음")
             if tp in active and len(rd(tp)) > ic["topic_max_chars"]:
-                warn.append(f"WORKLOG {os.path.basename(tp)} {len(rd(tp))}자 > {ic['topic_max_chars']} → handoff.py archive")
+                warn.append(f"WORKLOG {os.path.basename(tp)} {len(rd(tp))}자 > {ic['topic_max_chars']} → " + ARCHIVE_HINT)
         if os.path.exists(L["worklog_index"]):
             items = re.findall(r"^- (\d{4}-\d{2})-\d{2}", rd(L["worklog_index"]), re.M)
             if len(items) > ic["worklog_index_lines"]:
-                warn.append(f"WORKLOG INDEX {len(items)}줄 > {ic['worklog_index_lines']} → handoff.py archive")
+                warn.append(f"WORKLOG INDEX {len(items)}줄 > {ic['worklog_index_lines']} → " + ARCHIVE_HINT)
             old = [x for x in items if x < TODAY.strftime("%Y-%m")]
             if old:
-                warn.append(f"WORKLOG INDEX에 지난달 줄 {len(old)}개 → handoff.py archive")
+                warn.append(f"WORKLOG INDEX에 지난달 줄 {len(old)}개 → " + ARCHIVE_HINT)
     # 골
     if index_kind(L["goals_index"]):
         it = idx_text(L["goals_index"], f"{L['goals']}/INDEX-done.md")
@@ -846,7 +853,7 @@ def lint(cfg):
         fresh = fresh_done_lines(L["remaining"])
         nd = sum(1 for s, _, _ in done_blocks(ls) if ls[s] not in fresh)
         if nd:
-            warn.append(f"REMAINING에 완료 항목 {nd}건 잔존 → handoff.py archive")
+            warn.append(f"REMAINING에 완료 항목 {nd}건 잔존 → " + ARCHIVE_HINT)
         act = sum(1 for l in ls if OPEN_RE.match(l))
         if act > ic["remaining_active_lines"]:
             warn.append(f"REMAINING 활성 {act}줄 > {ic['remaining_active_lines']} — 큰 묶음은 별도 문서로 빼고 링크")
@@ -867,7 +874,7 @@ def lint(cfg):
     # 시작 읽기량
     tot = chars(start_set(cfg))
     if tot > ic["start_budget"]:
-        warn.append(f"세션 시작 읽기량 {tot}자 > 목표 {ic['start_budget']} → handoff.py archive, 또는 활성 목록을 줄인다")
+        warn.append(f"세션 시작 읽기량 {tot}자 > 목표 {ic['start_budget']} → " + ARCHIVE_HINT + ", 또는 활성 목록을 줄인다")
     return err, warn
 
 

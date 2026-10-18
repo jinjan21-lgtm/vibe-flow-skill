@@ -116,7 +116,7 @@ def precheck(cfg):
     total = hindex.chars(order)
     if hindex.is_indexed(cfg):
         budget = hindex.icfg(cfg)["start_budget"]
-        print(f"[precheck] 시작 읽기량 {total}자 / 목표 {budget}자" + (" — 넘음: handoff.py archive" if total > budget else "")
+        print(f"[precheck] 시작 읽기량 {total}자 / 목표 {budget}자" + (" — 넘음: " + hindex.ARCHIVE_HINT if total > budget else "")
               + "".join(f"\n  {len(hindex.rd(p)):>6}자 {p}" for p in order))
         print("[precheck] 본문은 INDEX에서 고른 것만. 결정은 탐색 단계에서 작업이 닿는 태그로: grep \"#<화면ID>\" " + f"{hdir}/DECISIONS.md")
     else:
@@ -760,7 +760,8 @@ def check_record(cfg, commit=None):
     miss = []
     work = [f for f in files if not f.startswith(hdir + "/") and not f.startswith(goals_dir + "/")]
     if not work:
-        miss.append(f"{label}에 작업 파일 변경이 없음 — 기록은 작업과 같은 커밋에 넣는다(골 작업은 QA 뒤 git commit --amend로 합친다)")
+        miss.append(f"{label}에 작업 파일 변경이 없음 — 기록은 작업과 같은 커밋에 넣는다(골 작업은 QA 뒤 git commit --amend로 합친다). "
+                    "archive·기록만 따로 커밋했다면 git reset --soft HEAD^ 로 풀고 작업 커밋에 합친다")
     if not gids:
         miss.append("커밋 메시지·브랜치에 골 ID 없음" if branch else "커밋 메시지에 골 ID 없음")
 
