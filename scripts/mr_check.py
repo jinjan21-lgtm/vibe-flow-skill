@@ -680,11 +680,25 @@ JS_TEST_FILE = re.compile(r"\.(?:test|spec)\.[cm]?[jt]sx?$")
 
 
 def js_parts(tid):
-    """JS 식별자 → (파일, [묶음…, 이름]). JS 식별자가 아니면 None."""
-    if not JS_TEST_FILE.search(re.split(r"\s*[›>]\s*", tid)[0]):
+    """JS 식별자 → (파일, 나머지 문자열 — 정규화한 전체). JS 식별자가 아니면 None.
+    구분자는 파일 바로 뒤의 것 하나로 정한다(jest ' › ', vitest ' > ') — 이름 속 '>'·'›'는 쪼개지 않는다(A17-01).
+    대조는 이 전체 문자열의 일치로만 한다(구분자 표기만 맞춤)."""
+    m = re.match(r"\s*([\w./\\-]+\.(?:test|spec)\.[cm]?[jt]sx?)\s*([›>])\s*(\S.*?)\s*$", tid or "")
+    if not m:
         return None
-    parts = [x.strip() for x in re.split(r"\s*[›>]\s*", tid) if x.strip()]
-    return (parts[0], parts[1:]) if len(parts) > 1 else None
+    sep = m.group(2)
+    rest = m.group(3)
+    if sep == "›":   # jest: ' › '만 구분자
+        rest = " › ".join(x.strip() for x in rest.split("›"))
+    else:            # vitest: ' > '만 구분자(공백으로 둘러싼 것) — 표기를 jest 모양으로 맞춘다
+        rest = " › ".join(x.strip() for x in re.split(r"\s>\s", rest))
+    return m.group(1).replace("\\", "/"), rest
+
+
+def js_names(rest):
+    """js_parts 나머지의 이름 후보 — 끝에서부터 묶음을 붙여 간다('Suite › a > b'에서 'a > b'처럼 이름에 구분자가 든 경우)."""
+    parts = rest.split(" › ")
+    return [" › ".join(parts[i:]) for i in range(len(parts))][::-1]
 
 
 def test_ids(value):
@@ -723,13 +737,22 @@ def test_exists(tid):
     JS 식별자는 그 파일이 있고 마지막 이름이 it('…')·test('…')로 정의돼 있어야."""
     js = js_parts(tid)
     if js:
-        f, names = js
+        f, rest_js = js
         if not os.path.isfile(f):
             return False
         with open(f, encoding="utf-8", errors="ignore") as fh:
             body = fh.read()
-        return bool(re.search(rf"\b(?:it|test)(?:\.\w+)?\(\s*([\"'`]){re.escape(names[-1])}\1", body))
+        # 이름은 끝 성분부터(이름 속 구분자 가능) — 그 문자열 그대로 it/test 제목으로 정의돼 있어야
+        return any(re.search(rf"\b(?:it|test)(?:\.\w+)?\(\s*([\"'`]){re.escape(n)}\1", body) for n in js_names(rest_js))
     path, _, rest = tid.partition("::")
+    if rest and path.endswith(".py") and re.search(r"::|\.", rest):   # 'path.py::Class.test_x' — 그 클래스가 그 파일에 있어야(A17-02)
+        cls = re.split(r"::|\.", rest)[0]
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as fh:
+                if not re.search(rf"^\s*class\s+{re.escape(cls)}\b", fh.read(), re.M):
+                    return False
+        except OSError:
+            return False
     if path.endswith(".py") and not os.path.isfile(path):
         return False
     # 'path.py::Class.test_x'(pytest 경로 + unittest 점 이름 — E2E S3 t3y2)도 마지막 성분이 정의 이름
@@ -922,6 +945,8 @@ def test_match(rid, recorded):
     if "." not in q:
         return _last(recorded) == q
     r = _qual(recorded)
+    if re.search(r"[/\\]|\.py(?:::|$)", rid):   # 경로를 적은 식별자는 그 파일의 테스트만 — 접미 일치로 다른 경로를 받지 않는다(A17-02)
+        return r == q
     return r == q or r.endswith("." + q)
 
 

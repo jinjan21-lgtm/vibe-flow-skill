@@ -278,3 +278,14 @@ E2E S2(t3x1·t3x2·t4x1·t4x2): 셋은 merge·`verify-evidence --run-tests`까�
 | S3-E1 | E2E t3y2 | Codex가 쓴 `tests/test_hotel.py::TestBilling.test_x`(경로 + 점 이름)를 파일 경로로만 읽어 merge 차단 → 에이전트가 이름 형식을 바꿔 리뷰를 다시 돌려야 했음 | `TEST_ID`가 `path.py::Class.test_x`, `test_exists`는 마지막 성분 |
 
 E2E S3: t3y1·t4y1 merge·`verify-evidence --run-tests` 통과(숨은 테스트 통과), t3y2·t4y2는 정책 미결(과거 청구서 정정·ADR 법인 할인)로 정상 정지. S3-E1로 판이 바뀌어 S4로 4건 다시.
+
+| 17차 (S4 54f4ba9) | A16-01 부분 해소(JS 이름 '>' 잔여), S3-E1 해소 | A17-01·A17-02 (major 2) | 아래 |
+
+### 17차 처리 (tests/test_r6_audit17.py — 실패 3건 확인 뒤 수정)
+
+| ID | 심각도 | 내용 | 처리 |
+|---|---|---|---|
+| A17-01 | major | JS 이름 속 '>'를 구분자로 읽어 'renders >'를 'renders'로 — 실행 안 한 테스트가 다른 테스트의 ok로 통과 | `js_parts`: 구분자는 파일 바로 뒤의 것 하나(jest ' › '·vitest ' > '), 나머지는 표기만 맞춘 전체 문자열로 일치. `test_exists`는 끝 성분부터 묶음을 붙인 후보가 it/test 제목으로 정의됐는지 |
+| A17-02 | major | 경로를 적은 파이썬 테스트가 다른 디렉터리의 같은 이름 테스트 ok로 통과(접미 일치) | 경로가 있는 식별자는 정규화한 전체 일치만, `path.py::Class.test_x`는 그 파일에 그 클래스가 있어야. 경로 없는 `Class.test_x`는 예전대로 끝 일치 |
+
+E2E S4: t3z1·t3z2·t4z1 merge·`verify-evidence --run-tests` 통과(숨은 테스트 통과), t4z2는 정책 미결로 정상 정지 → 시뮬레이션 사용자 결정 뒤 이어 감. A17로 판이 바뀌어 S5로 4건 다시.
