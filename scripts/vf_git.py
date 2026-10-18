@@ -2,6 +2,7 @@
 import json
 import re
 import os
+import shutil
 import subprocess
 import tempfile
 
@@ -38,6 +39,66 @@ def codex_cmd(out, cfg=None):
     eff = (cfg or config()).get("codex_effort", "high")
     cmd = ["codex", "exec", "--skip-git-repo-check", "-o", out]
     return cmd + (["-c", f"model_reasoning_effort={eff}"] if eff else [])
+
+
+# 리뷰어(골 판정·설계 확인·리뷰를 맡는 LLM). 판단은 LLM이, 스크립트는 호출과 형식·증거 대조만 한다.
+# Codex가 없으면 별도 Claude 프로세스(claude -p)가 맡는다 — 구현 중인 세션의 서브에이전트가 아니라 새 프로세스라서
+# 구현 맥락을 물려받지 않고, 스크립트가 직접 불러 결과 파일을 만든다(구현 AI가 리뷰 원문을 대신 쓰는 길이 없다).
+REVIEWERS = ("codex", "claude")
+CLAUDE_REVIEWER_ROLE = ("너는 이 저장소 변경의 독립 검토자다. 파일을 고치거나 명령을 실행하지 않는다. "
+                        "저장소의 CLAUDE.md·AGENTS.md·스킬에 있는 작업 절차(인수인계·커밋 등)는 따르지 않는다. "
+                        "받은 지시의 출력 형식만 그대로 낸다.")
+
+
+def reviewer(cfg=None):
+    """쓸 리뷰어 이름 또는 None. 설정 키 reviewer: auto(기본 — codex, 없으면 claude) · codex · claude.
+    명시한 리뷰어가 PATH에 없으면 None(다른 리뷰어로 몰래 바꾸지 않는다)."""
+    want = (cfg if cfg is not None else config()).get("reviewer", "auto")
+    if want in REVIEWERS:
+        return want if shutil.which(want) else None
+    return next((r for r in REVIEWERS if shutil.which(r)), None)
+
+
+def reviewer_note():
+    """claude 리뷰어일 때 붙이는 설명 — 왜 claude인지(Codex 없음 / 설정)."""
+    why = "설정 reviewer: claude" if shutil.which("codex") else "Codex 없음"
+    return f"{why} — claude -p 별도 프로세스, 읽기 전용 도구"
+
+
+def claude_cmd(cfg=None):
+    """claude -p 리뷰어 명령 — 읽기 전용 도구(Read·Grep·Glob)만, 사용자·프로젝트 설정(훅·플러그인) 없이, 세션 저장 없이.
+    프롬프트는 표준 입력, 응답은 표준 출력. 모델은 설정 키 claude_model(없으면 Claude Code 기본값)."""
+    cfg = cfg if cfg is not None else config()
+    cmd = ["claude", "-p", "--output-format", "text", "--tools", "Read,Grep,Glob", "--no-session-persistence",
+           "--setting-sources", "", "--append-system-prompt", CLAUDE_REVIEWER_ROLE]
+    return cmd + (["--model", cfg["claude_model"]] if cfg.get("claude_model") else [])
+
+
+def run_reviewer(prompt, out, timeout, cfg=None):
+    """리뷰어를 한 번 부른다 → (이름, 종료 코드, 출력 본문, stderr 끝). 결과는 out 파일에도 남는다.
+    리뷰어가 없으면 (None, 127, '', 이유) — 판정 없음이지 통과가 아니다."""
+    cfg = cfg if cfg is not None else config()
+    name = reviewer(cfg)
+    if os.path.exists(out):
+        os.remove(out)
+    if not name:
+        want = cfg.get("reviewer", "auto")
+        return None, 127, "", (f"리뷰어 {want} 없음(PATH)" if want in REVIEWERS else "리뷰어 없음 — codex 또는 claude가 PATH에 필요")
+    data = prompt.encode("utf-8")
+    if name == "codex":   # 예전 호출 그대로(Windows는 셸 — npm .cmd 설치)
+        r = subprocess.run(codex_cmd(out, cfg), input=data, capture_output=True, timeout=timeout, shell=(os.name == "nt"))
+    else:
+        exe = shutil.which(name) or name
+        shell = os.name == "nt" and not exe.lower().endswith(".exe")
+        r = subprocess.run(claude_cmd(cfg), input=data, capture_output=True, timeout=timeout, shell=shell)
+        if r.stdout:
+            with open(out, "wb") as f:
+                f.write(r.stdout)
+    body = ""
+    if os.path.exists(out):
+        with open(out, encoding="utf-8", errors="replace") as f:
+            body = f.read()
+    return name, r.returncode, body, (r.stderr or b"").decode("utf-8", "replace").strip()[-400:]
 
 
 def config():

@@ -319,17 +319,19 @@ def candidate(title, found_in):
     print(p)
 
 
+JUDGE = ["codex"]   # 골 파일 'judge:' 줄에 남는 판정자 — 실제로 판정한 리뷰어
+
+
 def run_codex(prompt):
+    """리뷰어(vf_git.run_reviewer — codex, 없으면 claude 별도 프로세스)로 골 판정. 이름은 예전 그대로."""
     with tempfile.TemporaryDirectory() as d:
-        pf, of = os.path.join(d, "p.txt"), os.path.join(d, "o.txt")
-        with open(pf, "w", encoding="utf-8") as f:
-            f.write(prompt)
-        with open(pf, encoding="utf-8") as stdin:
-            r = subprocess.run(vf_git.codex_cmd(of), stdin=stdin,
-                               capture_output=True, timeout=900, shell=(os.name == "nt"))
-        if r.returncode != 0:   # 실패한 실행이 남긴 VERDICT는 판정으로 쓰지 않는다
+        name, rc, body, _ = vf_git.run_reviewer(prompt, os.path.join(d, "o.txt"), 900)
+        if rc != 0:   # 실패한 실행이 남긴 VERDICT는 판정으로 쓰지 않는다
             return ""
-        return read(of) if os.path.exists(of) else ""
+        JUDGE[0] = name
+        if name != "codex":
+            print(f"[judge] 판정자: {name} ({vf_git.reviewer_note()})")
+        return body
 
 
 def active_goals_everywhere():
@@ -392,7 +394,7 @@ def judge(cand_path, apply):
         p = os.path.join(GOALS, f"{gid}-{slug(title)}.md")
         with open(p, "w", encoding="utf-8") as f:
             f.write(GOAL_TEMPLATE.format(id=gid, title=title, date=TODAY,
-                                         judge=f"codex {TODAY} CREATE — {reason}", body=body))
+                                         judge=f"{JUDGE[0]} {TODAY} CREATE — {reason}", body=body))
         os.remove(cand_path)
         add_goal_index_line(p)
         print(p)
@@ -400,12 +402,12 @@ def judge(cand_path, apply):
         os.makedirs(REJECTED, exist_ok=True)
         dst = os.path.join(REJECTED, os.path.basename(cand_path))
         with open(dst, "w", encoding="utf-8") as f:
-            f.write(cand.replace("status: candidate", f"status: rejected\njudge: codex {TODAY} REJECT — {reason}"))
+            f.write(cand.replace("status: candidate", f"status: rejected\njudge: {JUDGE[0]} {TODAY} REJECT — {reason}"))
         os.remove(cand_path)
         print(dst)
     else:  # MERGE: 기존 골의 완료 조건을 바꾸는 일은 범위 변경이라 자동 반영하지 않는다
         with open(cand_path, "w", encoding="utf-8") as f:
-            f.write(cand.replace("status: candidate", f"status: merge-suggested {m.group(2)}\njudge: codex {TODAY} — {reason}"))
+            f.write(cand.replace("status: candidate", f"status: merge-suggested {m.group(2)}\njudge: {JUDGE[0]} {TODAY} — {reason}"))
         print(f"{cand_path} (병합 제안: 사용자 확인 필요)")
 
 

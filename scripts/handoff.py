@@ -163,20 +163,26 @@ def precheck(cfg):
 
 
 def readiness(cfg, run_tests=False):
-    """착수 가능성: git·python·codex가 PATH에 있는가, test_cmd가 있는가(--run-tests면 실제로 돌린다).
-    git·python(스크립트)·codex(골 판정·설계 확인·리뷰 — 면제 없음)·test_cmd(QA)가 없거나, 추적 파일에 커밋 안 된 변경이 있으면
+    """착수 가능성: git·python·리뷰어(codex, 없으면 claude)가 PATH에 있는가, test_cmd가 있는가(--run-tests면 실제로 돌린다).
+    git·python(스크립트)·리뷰어(골 판정·설계 확인·리뷰 — 면제 없음)·test_cmd(QA)가 없거나, 추적 파일에 커밋 안 된 변경이 있으면
     (QA tree·리뷰 대상이 섞인다) 끝까지 갈 수 없다 — 착수 불가, 종료코드 1."""
     import shutil
     tools = {"git": shutil.which("git"), "python": shutil.which("python") or shutil.which("python3") or shutil.which("py"),
-             "codex": shutil.which("codex")}
+             "codex": shutil.which("codex"), "claude": shutil.which("claude")}
     cmd = (cfg.get("test_cmd") or "").strip()
+    rv = vf_git.reviewer(cfg)   # 골 판정·설계 확인·리뷰 LLM — codex, 없으면 claude(별도 프로세스)
     print("[precheck] 착수 가능성: " + " · ".join(f"{k} {'있음' if v else '없음'}" for k, v in tools.items())
-          + f" · test_cmd {'있음' if cmd else '없음'}")
+          + f" · test_cmd {'있음' if cmd else '없음'} · 리뷰어 {rv or '없음'}"
+          + (f" ({vf_git.reviewer_note()})" if rv == "claude" else ""))
     head = tools["git"] and vf_git.git("rev-parse", "--verify", "-q", "HEAD")
     dirty = [f for f in vf_git.git("diff", "--name-only", "HEAD").splitlines() if f] if head else []   # 스테이지 포함, 미추적 제외
     block = [f"커밋 안 된 변경 {len(dirty)}개({', '.join(dirty[:5])}{' …' if len(dirty) > 5 else ''}) — 커밋하거나 stash 먼저"
              ] if dirty else []
-    block += [f"{k} 없음(PATH)" for k in ("git", "python", "codex") if not tools[k]]
+    block += [f"{k} 없음(PATH)" for k in ("git", "python") if not tools[k]]
+    if not rv:
+        want = cfg.get("reviewer", "auto")
+        block.append(f"리뷰어 {want} 없음(PATH)" if want in vf_git.REVIEWERS
+                     else "리뷰어 없음(PATH) — codex 또는 claude 필요(골 판정·설계 확인·리뷰, 면제 없음)")
     if not cmd:
         block.append("test_cmd 없음(.vibe-flow.json — 자동 테스트가 없으면 syntax_check.py)")
     if cmd and not run_tests:

@@ -36,7 +36,7 @@ EOF
 
 team-handoff `SKILL.md`, `CLAUDE.md`, `AGENTS.md`에는 골 ID 표기와 `handoff.py precheck/claim/check-record` 호출 지점을 넣는다 — 형식은 structure.md의 표 그대로.
 
-설치 확인: `python $S/scripts/handoff.py precheck --run-tests` — 마지막에 착수 가능성(git·python·codex PATH, `test_cmd`, 기준 테스트 결과)이 나온다. Codex는 면제 없이 필수(골 판정·설계 확인·리뷰), 추적 파일에 커밋 안 된 변경이 있어도 착수 불가다. `착수 불가`면 그 항목부터 고친다.
+설치 확인: `python $S/scripts/handoff.py precheck --run-tests` — 마지막에 착수 가능성(git·python·리뷰어(codex, 없으면 claude) PATH, `test_cmd`, 기준 테스트 결과)이 나온다. 리뷰어는 면제 없이 필수(골 판정·설계 확인·리뷰) — Codex CLI가 없으면 Claude Code(`claude`)가 별도 프로세스로 맡는다, 추적 파일에 커밋 안 된 변경이 있어도 착수 불가다. `착수 불가`면 그 항목부터 고친다.
 
 제3자 재검증(리뷰어·감사): 원격에서 새로 `git clone`한 뒤 `python <vibe-flow>/scripts/handoff.py verify-evidence G-### [--commit <기록 커밋>]`. 커밋된 증거만으로 임시 clone에 `.vibe/`를 되살려 로컬과 같은 merge 검사를 돌린다(재연 — qa-gate.md 「결과 등록」). `--run-tests`면 커밋된 코드에서 테스트도 다시 돌린다(커밋의 test_cmd 실행 — 믿는 코드만). 종료 코드: 통과 0(재실행 일치), 실패 1, 옛 판 증거 3(`LEGACY` — 재검증 대상), 재실행 안 함 4(`UNPROVEN` — 통과 아님).
 
@@ -70,6 +70,8 @@ cp $S/templates/design-system.md docs/
 | `dev_url` | - | QA 브라우저 단계 주소 |
 | `ui_globs` | tsx·jsx·vue·css·html·pages·routes·components | 브라우저 QA 필수·디자인시스템 참조 판정 |
 | `design_system` | `docs/design-system.md` | 디자인시스템 문서 |
+| `reviewer` | `auto` | 골 판정·설계 확인·리뷰 LLM. `auto`: codex, 없으면 claude(`claude -p`, 읽기 전용). `codex`·`claude`로 고정하면 그것이 없을 때 착수 불가(다른 것으로 바꾸지 않음) |
+| `claude_model` | 없음 | claude 리뷰어 모델(`--model`). 없으면 Claude Code 기본값 |
 | `codex_effort` | `high` | 골 판정·설계 확인·리뷰의 Codex 추론 강도(이 호출에만 `-c model_reasoning_effort=`로 전달, `~/.codex` 설정은 그대로). `""`이면 Codex 기본값 |
 | `design_skip` | `{"max_lines": 50, "max_files": 3}` | 이 이하면 설계 확인 생략 가능 |
 | `claim_days` | 7 | 착수 표시 유효 기간 |

@@ -7,7 +7,7 @@ description: Use when starting, continuing, or finishing coding work in a repo t
 
 ## Overview
 
-바이브코딩의 위험은 에이전트가 **할 일을 스스로 넓히는 것**과 **다 됐다고 스스로 판정하는 것**이다. 그래서 판단을 바깥에 둔다. 골·설계·리뷰는 Codex가, 머지 가능 여부는 QA 증거와 `mr_check.py`가 정한다. 기록 형식은 [docs/structure.md](docs/structure.md).
+바이브코딩의 위험은 에이전트가 **할 일을 스스로 넓히는 것**과 **다 됐다고 스스로 판정하는 것**이다. 그래서 판단을 바깥에 둔다. 골·설계·리뷰는 리뷰어 LLM(Codex, 없으면 별도 Claude 프로세스 — review-loop.md 「리뷰어」)이, 머지 가능 여부는 QA 증거와 `mr_check.py`가 정한다. 기록 형식은 [docs/structure.md](docs/structure.md).
 
 **구현한 에이전트는 자기 골·설계·리뷰·QA의 판정자가 아니다.**
 

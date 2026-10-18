@@ -1,6 +1,6 @@
 # vibe-flow
 
-바이브코딩(AI 에이전트가 코드를 쓰는 개발)을 위한 Claude Code 스킬입니다. 에이전트가 **할 일을 스스로 넓히는 것**과 **다 됐다고 스스로 판정하는 것**을 막기 위해, 판단을 바깥에 둡니다 — 골·설계·리뷰는 Codex가, 머지 가능 여부는 QA 증거와 스크립트가 정합니다.
+바이브코딩(AI 에이전트가 코드를 쓰는 개발)을 위한 Claude Code 스킬입니다. 에이전트가 **할 일을 스스로 넓히는 것**과 **다 됐다고 스스로 판정하는 것**을 막기 위해, 판단을 바깥에 둡니다 — 골·설계·리뷰는 리뷰어 LLM(Codex, 없으면 별도 Claude 프로세스)이, 머지 가능 여부는 QA 증거와 스크립트가 정합니다.
 
 ```
 /vibe-flow            전체 흐름(오케스트레이터)
@@ -76,7 +76,7 @@ Windows는 `New-Item -ItemType Junction`(setup.md). 팀 레포는 `.claude/skill
 준비물:
 
 1. **Python 3.10+**, **git**
-2. **Codex CLI** — 골 판정·설계 확인·리뷰에 씁니다(`codex exec`).
+2. **Codex CLI** 또는 **Claude Code** — 골 판정·설계 확인·리뷰에 씁니다. Codex(`codex exec`)가 있으면 Codex, 없으면 Claude Code를 별도 프로세스(`claude -p`, 읽기 전용 도구)로 부릅니다(`.vibe-flow.json` `reviewer`).
 3. **핸드오프 스킬** — 팀 레포는 [team-handoff](https://github.com/jinjan21-lgtm/team-handoff-skill)를 `.claude/skills/team-handoff/`에 함께 둡니다.
 4. **브라우저 QA** — 화면 변경 확인용. [qa-run](https://github.com/jinjan21-lgtm/qa-run-skill)의 Aside 캡처 도구를 씁니다.
 

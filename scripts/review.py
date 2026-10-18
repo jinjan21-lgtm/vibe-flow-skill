@@ -44,22 +44,23 @@ def read(p):
         return f.read()
 
 
+REVIEWER = {"name": ""}   # 이번 실행에서 판정을 낸 리뷰어 — 기록(r<N>.tree·d<N>.meta)의 'reviewer:' 줄
+
+
 def run_codex(text, out):
-    """실패(종료 코드·빈 출력)면 판정 없이 exit 1. 이전 실행의 결과 파일을 판정으로 쓰지 않는다."""
-    if os.path.exists(out):
-        os.remove(out)
+    """리뷰어(vf_git.run_reviewer — codex, 없으면 claude 별도 프로세스)를 부른다. 이름은 예전 그대로.
+    실패(종료 코드·빈 출력·리뷰어 없음)면 판정 없이 exit 1. 이전 실행의 결과 파일을 판정으로 쓰지 않는다."""
     with open(out + ".in", "w", encoding="utf-8") as f:
         f.write(text)
-    with open(out + ".in", encoding="utf-8") as stdin:
-        r = subprocess.run(vf_git.codex_cmd(out), stdin=stdin,
-                           capture_output=True, timeout=1200, shell=(os.name == "nt"))
-    body = read(out) if os.path.exists(out) else ""
-    if r.returncode or not body.strip():
+    name, rc, body, err = vf_git.run_reviewer(text, out, 1200)
+    if rc or not body.strip():
         if os.path.exists(out):
             os.replace(out, out + ".failed")
-        err = (r.stderr or b"").decode("utf-8", "replace").strip()[-400:]
-        sys.exit(f"[review] Codex 실행 실패 (exit {r.returncode}, 출력 {'없음' if not body.strip() else '있음 — 무시'}). "
+        sys.exit(f"[review] 리뷰어({name or '없음'}) 실행 실패 (exit {rc}, 출력 {'없음' if not body.strip() else '있음 — 무시'}). "
                  f"판정을 적지 않습니다.\n{err}")
+    REVIEWER["name"] = name
+    if name != "codex":
+        print(f"[review] 리뷰어: {name} ({vf_git.reviewer_note()})")
     return body
 
 
@@ -370,7 +371,8 @@ def design_review(n, mr_path, dry):
                  f"판정을 적지 않습니다 ({out}.failed).\n" + "\n".join(f" - {c}" for c in bad)
                  + "\n→ 같은 회차를 다시 돌립니다.")
     with open(os.path.join(D, f"d{n}.meta"), "w", encoding="utf-8") as f:
-        f.write(mr_check.record_stamp(goal, cfg) + f"diverged: {'yes' if early else 'no'}\nfiles: {', '.join(early)}\n"
+        f.write(mr_check.record_stamp(goal, cfg) + f"reviewer: {REVIEWER['name']}\n"
+                + f"diverged: {'yes' if early else 'no'}\nfiles: {', '.join(early)}\n"
                 + f"design: {mr_check.design_hash(read(mr_path))}\n")   # 확인 뒤 「설계」가 바뀌면 build부터 막는다
     fs = findings(text)
     print(f"DESIGN {n}: VERDICT {v.group(1)} · " + (" · ".join(f"{x['sev']}" for x in fs) or "지적 없음"))
@@ -494,7 +496,7 @@ def main():
                      f"판정을 적지 않습니다 ({out}.failed).\n" + "\n".join(f" - {c}" for c in bad)
                      + "\n→ 같은 라운드 1을 다시 돌립니다.")
     with open(os.path.join(D, f"r{n}.tree"), "w", encoding="utf-8") as f:
-        f.write(f"{cur}\n" + mr_check.record_stamp(goal, vf_git.config()) + code_tree_line(cur)
+        f.write(f"{cur}\n" + mr_check.record_stamp(goal, vf_git.config()) + f"reviewer: {REVIEWER['name']}\n" + code_tree_line(cur)
                 + f"conds: {mr_check.completion_hash(mr)}\ncontract: {mr_check.contract_hash(mr)}\n")   # 리뷰 뒤 완료 조건이 바뀌면 qa·merge가 막는다
     cycle_append(ctx, round=n, verdict=v.group(1))   # 받아들인 라운드만 센다(실패·무효 실행은 세지 않는다)
     fs = findings(text)
