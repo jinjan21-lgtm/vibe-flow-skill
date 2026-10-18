@@ -638,7 +638,9 @@ def check(text, stage, cfg):
             miss += red_evidence(s.get("QA 결과", ""), gids, cfg)
         miss += schema_problems(goal, cfg, s.get("QA 결과", ""))
         if profile(s) == "강화":
-            ids = regression_ids(s.get("QA 결과", ""))
+            ids, bad_lines = regression_ids(s.get("QA 결과", ""))
+            if bad_lines:
+                miss.append(f"강화 프로필 — 「QA 결과」 '- 회귀:' 줄에 테스트 식별자가 없음(자리표시·설명뿐): {', '.join(bad_lines[:3])}")
             if not ids:
                 miss.append("강화 프로필 — 「QA 결과」에 '- 회귀: <돌린 회귀 테스트 이름>' 줄 필요"
                             "(test_x · Class.test_x · tests/x.py::name)")
@@ -651,12 +653,21 @@ def check(text, stage, cfg):
 
 
 def regression_ids(qa):
-    """「QA 결과」 '- 회귀:' 줄들(여럿 가능 — JS 식별자는 한 줄에 하나)의 테스트 식별자, 안내 주석 밖만."""
+    """「QA 결과」 '- 회귀:' 줄들(여럿 가능 — JS 식별자는 한 줄에 하나)의 (테스트 식별자, 잘못된 줄). 안내 주석 밖만.
+    값의 '<…>'는 지우지 않는다 — 'renders <div>'처럼 실제 테스트 이름일 수 있다(A16-01). 값 전체가 자리표시('<…>')이거나
+    식별자가 하나도 없는 줄은 잘못된 줄로 돌려준다(다른 줄이 있다고 무시되지 않게)."""
     qa = re.sub(r"<!--.*?-->", "", qa or "", flags=re.S)
-    return [t for v in re.findall(r"^\s*[-*]?\s*회귀\s*:(.*)$", qa, re.M) for t in test_ids(re.sub(r"<[^>\n]+>", "", v))]
+    ids, bad = [], []
+    for v in re.findall(r"^\s*[-*]?\s*회귀\s*:(.*)$", qa, re.M):
+        got = [] if re.fullmatch(r"\s*<[^>\n]*>\s*", v) else test_ids(v)
+        if got:
+            ids += got
+        else:
+            bad.append(v.strip()[:60] or "(빈 값)")
+    return ids, bad
 
 
-TEST_ID = re.compile(r"(?<![\w./\\-])(?:[\w./\\-]+\.py::\w+(?:::\w+)*|(?:[\w.-]+[/\\])*tests?[/\\][\w./\\-]*\.py"
+TEST_ID = re.compile(r"(?<![\w./\\-])(?:[\w./\\-]+\.py::\w+(?:(?:::|\.)\w+)*|(?:[\w.-]+[/\\])*tests?[/\\][\w./\\-]*\.py"
                      r"|(?:[A-Za-z_]\w*\.)*test_\w+)(?![\w./\\-])")
 
 
@@ -721,7 +732,8 @@ def test_exists(tid):
     path, _, rest = tid.partition("::")
     if path.endswith(".py") and not os.path.isfile(path):
         return False
-    name = rest.split("::")[-1] if rest else ("" if path.endswith(".py") else tid.split(".")[-1])
+    # 'path.py::Class.test_x'(pytest 경로 + unittest 점 이름 — E2E S3 t3y2)도 마지막 성분이 정의 이름
+    name = re.split(r"::|\.", rest)[-1] if rest else ("" if path.endswith(".py") else tid.split(".")[-1])
     if not name:
         return True
     n = re.escape(name)   # 정의만 — 주석·문자열 속 이름은 테스트가 아니다

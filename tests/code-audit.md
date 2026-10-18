@@ -267,3 +267,14 @@ S1로 돌린 E2E 4건(t3w1·t3w2·t4w1·t4w2)이 모두 숨은 문제 없이 구
 | A15-02 | major | JS 테스트 제목 안에 다른 JS 식별자 문자열이 있으면 둘로 쪼개져 건너뛴 테스트가 통과로 대체 | 한 줄에 JS 식별자는 하나(첫 시작부터 줄 끝, 끝 '(파일:줄)'만 뗌). '- 회귀:'는 줄 여럿(`regression_ids`) |
 
 E2E S2(t3x1·t3x2·t4x1·t4x2): 셋은 merge·`verify-evidence --run-tests`까지 통과(과제 3 숨은 테스트 12/12 ×2). t4x1은 「미확인: ADR에 법인 할인 포함 여부」를 POLICY-PENDING으로 막고 사람 결정을 요청하며 정지 — 상태 셋이 의도대로 작동. A15 수정으로 판이 바뀌어 S3로 4건 다시.
+
+| 16차 (S3 721614e) | A15-01·A15-02 해소 | A16-01 (major 1) | 아래 |
+
+### 16차·E2E S3 처리 (tests/test_r6_audit16.py — 실패 확인 뒤 수정)
+
+| ID | 출처 | 내용 | 처리 |
+|---|---|---|---|
+| A16-01 | 16차 major | '- 회귀:' 값의 `<…>`를 지워 'renders <div>'가 'renders'로 바뀌고 skip이 ok로 대체, 자리표시뿐인 줄도 다른 줄이 있으면 무시 | `regression_ids`가 값을 지우지 않고 줄마다 — 값 전체가 자리표시이거나 식별자가 없는 줄은 따로 차단 |
+| S3-E1 | E2E t3y2 | Codex가 쓴 `tests/test_hotel.py::TestBilling.test_x`(경로 + 점 이름)를 파일 경로로만 읽어 merge 차단 → 에이전트가 이름 형식을 바꿔 리뷰를 다시 돌려야 했음 | `TEST_ID`가 `path.py::Class.test_x`, `test_exists`는 마지막 성분 |
+
+E2E S3: t3y1·t4y1 merge·`verify-evidence --run-tests` 통과(숨은 테스트 통과), t3y2·t4y2는 정책 미결(과거 청구서 정정·ADR 법인 할인)로 정상 정지. S3-E1로 판이 바뀌어 S4로 4건 다시.

@@ -45,7 +45,7 @@ class OneJsIdPerLineTest(unittest.TestCase):
     def test_regression_lines_each_one_id(self):
         import mr_check
         qa = "- 회귀: src/a.test.ts › Suite › prints\n- 회귀: test_app.T.test_x\n"
-        self.assertEqual(mr_check.regression_ids(qa), ["src/a.test.ts › Suite › prints", "test_app.T.test_x"])
+        self.assertEqual(mr_check.regression_ids(qa), (["src/a.test.ts › Suite › prints", "test_app.T.test_x"], []))   # 16차: (ids, 잘못된 줄)
 
 
 if __name__ == "__main__":
