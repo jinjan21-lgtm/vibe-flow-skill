@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """QA 코드 단계: test_cmd를 실제로 돌리고 그 결과를 작업물 tree에 묶어 남긴다. 레포 루트에서 실행.
 
-  python qa_run.py [--red] [--mr <mr 본문>]
+  python qa_run.py [--mr <mr 본문>]
+  python qa_run.py --red --mr <mr 본문>
 
   - 지금 작업물(미커밋 포함)의 tree(vf_git.snapshot)를 잡고 .vibe-flow.json의 test_cmd를 셸로 실행
   - .vibe/qa/<tree>.json에 tree·cmd·exit·started·seconds·tail(출력 마지막 200줄) 기록,
@@ -9,7 +10,7 @@
   - 「QA 결과」에 붙일 줄을 출력. --mr이면 그 본문의 '대상 tree'·'코드' 줄을 바로 고친다
     verbose 출력(unittest -v·pytest -v)이면 테스트별 결과 tests: {"<전체 이름>": "ok"|"fail"|"skip"}도
   - 종료코드: 통과 0, 실패 1, test_cmd 없음 2(미검증)
-  - --red: 구현 전 실패하는 테스트의 RED 증거. 같은 실행을 .vibe/qa/red-<tree>.json(+branch)에 남기고
+  - --red: 구현 전 실패하는 테스트의 RED 증거. 같은 실행을 .vibe/qa/red-<tree>.json(+branch·goal·base)에 남기고
     '- RED: <tree12> — N개 실패(이름…)' 줄을 출력(--mr이면 「QA 결과」에). 실패면 0, 이미 통과면 1(RED가 아님)
 
 verify(qa_text, cfg)는 mr_check merge 검사가 쓴다 — 「QA 결과」의 '코드: 통과'·'브라우저: 통과'를
@@ -51,9 +52,9 @@ def parse_counts(out):
         if re.match(r"^\s*Tests:?\s", line):
             p = re.search(r"(\d+) passed", line)
             t = re.search(r"(\d+) total", line) or re.search(r"\((\d+)\)", line)
-            if p and t:
+            if t and (p or re.search(r"\d+ failed", line)):   # 전부 실패면 'passed'가 없다(A11-01 — RED 출력)
                 s = re.search(r"(\d+) (?:skipped|todo)", line)
-                return int(p.group(1)), int(t.group(1)), int(s.group(1)) if s else 0
+                return int(p.group(1)) if p else 0, int(t.group(1)), int(s.group(1)) if s else 0
     for line in reversed(lines):   # pytest 요약 줄
         if re.search(r"\b\d+ (?:passed|failed|skipped)\b.*\bin [\d.]+s\b", line):
             n = {k: int(v) for v, k in re.findall(r"(\d+) (passed|failed|errors?|skipped|xfailed|xpassed)\b", line)}
@@ -69,12 +70,17 @@ def parse_counts(out):
             sk = kv.get("skipped", 0) + kv.get("expected failures", 0)
             bad = kv.get("failures", 0) + kv.get("errors", 0) + kv.get("unexpected successes", 0)
             return tot - bad - sk, tot, sk
+    syn = re.findall(r"^\[syntax\] (\d+)/(\d+) 통과", out or "", re.M)   # syntax_check.py(자동 테스트 없는 레포)
+    if syn:
+        return int(syn[-1][0]), int(syn[-1][1]), 0
     return None
 
 
 UT_LINE = re.compile(r"^(\w+) \(([\w.]+)\)(?:\n.*?)? \.\.\. (ok|FAIL|ERROR|skipped\b.*|expected failure|unexpected success)$",
                      re.M)
 PY_LINE = re.compile(r"^(\S+::\S+) (PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)\b", re.M)
+VT_LINE = re.compile(r"^\s*([✓√×✕↓-])\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?\s+>\s+.+?)(?:\s+\d+(?:\.\d+)?\s*m?s)?\s*$", re.M)
+JEST_FAIL = re.compile(r"^\s*●\s+(?!Test suite failed)(.+?)\s*$", re.M)   # jest 실패 요약 '● 묶음 › 이름'
 STATUS = {"ok": "ok", "PASSED": "ok", "FAIL": "fail", "ERROR": "fail", "FAILED": "fail", "unexpected success": "fail",
           "XPASS": "fail", "SKIPPED": "skip", "XFAIL": "skip", "expected failure": "skip"}
 
@@ -89,6 +95,31 @@ def parse_tests(out):
         res[key] = "skip" if st.startswith("skipped") else STATUS[st]
     for full, st in PY_LINE.findall(out):
         res[full] = STATUS[st]
+    # vitest(--reporter=verbose) '✓ src/a.test.ts > 묶음 > 이름 3ms' — 파일까지 든 전체 이름
+    for mark, full in VT_LINE.findall(out):
+        res[full.strip()] = "ok" if mark in "✓√" else ("skip" if mark in "↓-" else "fail")
+    # jest(--verbose) '  ✓ 이름 (3 ms)' — 파일(PASS/FAIL 머리줄)·describe 들여쓰기로 전체 이름. 실패 요약 '● 묶음 › 이름'도
+    fname, stack = "", []
+    for line in out.splitlines():
+        h = re.match(r"^(?:PASS|FAIL)\s+(\S+)", line)
+        if h:
+            fname, stack = h.group(1), []
+            continue
+        if not fname:
+            continue
+        t = re.match(r"^(\s+)([✓√✕×○])\s+(.+?)(?:\s+\(\d+(?:\.\d+)?\s*m?s\))?\s*$", line)
+        if t:
+            depth = len(t.group(1)) // 2
+            name = " › ".join([s for d, s in stack if d < depth] + [t.group(3)])
+            res[f"{fname} › {name}"] = "ok" if t.group(2) in "✓√" else ("skip" if t.group(2) == "○" else "fail")
+            continue
+        d = re.match(r"^(\s+)([^\s●✓√✕×○].*?)\s*$", line)
+        if d and not re.match(r"^\s+(?:at |Expected|Received|●)", line):
+            depth = len(d.group(1)) // 2
+            stack = [(dd, s) for dd, s in stack if dd < depth] + [(depth, d.group(2))]
+    for name in JEST_FAIL.findall(out):
+        if not any(k.endswith(" › " + name.strip()) or k.endswith(name.strip()) for k in res):
+            res[name.strip()] = "fail"
     return res
 
 
@@ -106,8 +137,10 @@ def all_skipped(rec):
 
 
 def ok(rec):
-    """통과한 실행인가: exit 0이고 ok가 false가 아니며 전부 건너뜀(passed 0, total>0)이 아니다."""
-    return isinstance(rec, dict) and rec.get("exit") == 0 and rec.get("ok", True) is not False and not all_skipped(rec)
+    """통과한 실행인가: exit 0이고 ok가 false가 아니며, 출력에서 읽은 테스트 수가 있고 통과가 1건 이상(A9-08 — 0건 실행·
+    수를 읽을 수 없는 출력은 통과가 아니다. 테스트 러너가 수를 출력하게 test_cmd를 고친다)."""
+    return (isinstance(rec, dict) and rec.get("exit") == 0 and rec.get("ok", True) is not False
+            and (rec.get("passed") or 0) > 0 and (rec.get("total") or 0) > 0)
 
 
 def is_media(p):
@@ -123,7 +156,9 @@ def code_tree(tree, cfg, plan=None):
     if plan is None:
         plan = vf_git.git("show", f"{tree}:{h}/PLAN.md") if vf_git.obj_type(f"{tree}:{h}/PLAN.md") == "blob" else ""
     names = vf_git.git("ls-tree", "-r", "--name-only", tree, check=True).splitlines()
-    rec = [f for f in names if f and (f.startswith((h + "/mr/", ".vibe/")) or mr_check.is_record(f, cfg, plan=plan))]
+    # 추적 중인 산출물(.pyc 등 — mr_check.tracked_artifact)도 뺀다: code_diff와 같은 제외 집합이어야 로컬·재연이 같다(A9-07)
+    rec = [f for f in names if f and (f.startswith((h + "/mr/", ".vibe/")) or mr_check.is_record(f, cfg, plan=plan)
+                                      or mr_check.tracked_artifact(f, cfg))]
     fd, idx = tempfile.mkstemp(prefix="vf-code-index-")
     os.close(fd)
     os.remove(idx)
@@ -132,11 +167,32 @@ def code_tree(tree, cfg, plan=None):
         vf_git.git("read-tree", tree, env=env, check=True)
         if rec:
             for i in range(0, len(rec), 200):
-                vf_git.git("rm", "--cached", "-q", "--", *rec[i:i + 200], env=env, check=True)
+                # rm --cached는 작업 트리 파일과 다르면 거부한다 — 임시 index에서만 지우는 update-index로
+                vf_git.git("update-index", "--force-remove", "--", *rec[i:i + 200], env=env, check=True)
         return vf_git.git("write-tree", env=env, check=True)
     finally:
         if os.path.exists(idx):
             os.remove(idx)
+
+
+def find_record(tgt):
+    """「QA 결과」 대상 sha(commit·tree, 7자 이상)의 실행 기록 (경로, dict|None, 대상 tree). tree 객체가 없으면(새 clone —
+    amend 전 tree는 받지 않는다) .vibe/qa/<tree>.json 이름이 그 sha로 시작하는 기록 하나. 못 찾으면 ('', None, '')."""
+    tree = vf_git.tree_of(tgt) if tgt else ""
+    if not tree and tgt and os.path.isdir(QA_DIR):
+        hits = [f[:-5] for f in os.listdir(QA_DIR) if re.fullmatch(r"[0-9a-f]{40}\.json", f) and f.startswith(tgt)]
+        tree = hits[0] if len(hits) == 1 else ""
+    if not tree:
+        return "", None, ""
+    p = record_path(tree)
+    if not os.path.exists(p):
+        return p, None, tree
+    try:
+        with open(p, encoding="utf-8") as f:
+            rec = json.load(f)
+    except (OSError, ValueError):
+        return p, "unreadable", tree
+    return p, rec, tree
 
 
 def record_path(tree, red=False):
@@ -151,18 +207,19 @@ def red_line(rec):
     return f"- RED: {rec['tree'][:12]} — {n}개 실패{names} (기록 {record_path(rec['tree'], red=True)})"
 
 
-def run(cfg, red=False):
-    """test_cmd 실행 → 기록. (기록 dict, 붙일 줄들). test_cmd가 없으면 None. red면 red-<tree>.json(+branch)·RED 줄."""
+def run(cfg, red=False, goal=""):
+    """test_cmd 실행 → 기록. (기록 dict, 붙일 줄들). test_cmd가 없으면 None. red면 red-<tree>.json(+branch·goal·base)·RED 줄.
+    RED 기록의 goal(MR 「골」)·base(기준 tree)는 merge가 이 골·이 기준의 RED만 증거로 쓰게 한다(오래된 RED 재사용 방지)."""
     cmd = (cfg.get("test_cmd") or "").strip()
     if not cmd:
         return None, []
     tree = vf_git.snapshot()
-    started = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    started = datetime.datetime.now().astimezone().isoformat(timespec="microseconds")   # RED→GREEN 순서 비교(A10-05)
     t0 = time.monotonic()
     r = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)   # unittest -v는 stderr로
     secs = round(time.monotonic() - t0, 1)
     out = (r.stdout or b"").decode("utf-8", errors="replace").replace("\r\n", "\n")
-    rec = {"tree": tree, "cmd": cmd, "exit": r.returncode, "started": started, "seconds": secs,
+    rec = {"schema": vf_git.EVIDENCE_SCHEMA, "tree": tree, "cmd": cmd, "exit": r.returncode, "started": started, "seconds": secs,
            "tail": "\n".join(out.splitlines()[-TAIL:])}
     cnt = parse_counts(out)
     if cnt:   # 통과/전체/건너뜀 수는 출력에서 — 「QA 결과」에 손으로 쓴 수와 대조한다(verify)
@@ -172,14 +229,32 @@ def run(cfg, red=False):
         rec["tests"] = tests
     rec["ok"] = ok(rec)
     if red:
+        import mr_check
         rec["branch"] = vf_git.current_branch()
+        rec["goal"] = goal
+        rec["base"] = mr_check.current_base(cfg)
+        if not mr_check.red_valid(rec):   # 명령 오류·이미 통과는 RED가 아니다 — 기록하지 않는다(A9-05: 무효 RED가 뒤에 쓰이지 않게)
+            return rec, []
     os.makedirs(QA_DIR, exist_ok=True)
     with open(record_path(tree, red), "w", encoding="utf-8", newline="\n") as f:
         json.dump(rec, f, ensure_ascii=False, indent=1)
         f.write("\n")
-    if vf_git.snapshot() != tree:
-        print("[qa-run] 경고: 테스트가 작업물을 바꿨다(추적 대상 파일 생성·수정) — 기록 tree는 실행 전 상태다. "
-              "산출물을 .gitignore에 넣고 다시 돌린다", file=sys.stderr)
+    after = vf_git.snapshot()
+    if after != tree:
+        try:   # 코드(기록·산출물 제외)가 바뀌었으면 기록 tree의 코드를 돌린 것이 아니다 — 통과로 남기지 않는다(A11-03)
+            moved = code_tree(after, cfg) != code_tree(tree, cfg)
+        except RuntimeError:
+            moved = True
+        if moved:
+            rec["ok"] = False
+            rec["changed_code"] = True
+            print("[qa-run] 실패: 테스트가 실행 중 코드를 바꿨다(추적 파일 수정·추적 안 된 파일 생성) — 기록 tree의 코드를 돌린 것이 "
+                  "아니다. 테스트가 만드는 파일은 .gitignore에 넣고 다시 돌린다", file=sys.stderr)
+            with open(record_path(tree, red), "w", encoding="utf-8", newline="\n") as f:
+                json.dump(rec, f, ensure_ascii=False, indent=1)
+                f.write("\n")
+        else:
+            print("[qa-run] 경고: 테스트가 산출물·기록 파일을 바꿨다 — .gitignore에 넣는다", file=sys.stderr)
     if red:
         return rec, [red_line(rec)]
     try:   # 기록 파일을 뺀 코드 tree — 새 clone은 QA 전·후 기록이 달라도 이것으로 대조한다(verify-evidence)
@@ -189,9 +264,13 @@ def run(cfg, red=False):
             f.write("\n")
     except RuntimeError as e:
         print(f"[qa-run] 경고: 코드 tree 계산 실패({e}) — 새 clone 대조는 재구성으로", file=sys.stderr)
-    verdict = "통과" if r.returncode == 0 else "실패"
+    verdict = "통과" if ok(rec) else "실패"   # 문구도 ok 기준(A10-08 — exit 0이어도 수를 못 읽으면 실패)
     if all_skipped(rec):
         verdict = "실패(전부 건너뜀)"
+    elif rec.get("changed_code"):
+        verdict = "실패(테스트가 코드를 바꿈)"
+    elif r.returncode == 0 and not ok(rec):
+        verdict = "실패(테스트 수를 읽을 수 없음·0건)"
     lines = [f"- 대상 tree: {tree}",
              f"- 코드: {verdict} — {count_text(rec) + ', ' if cnt else ''}{cmd} exit {r.returncode}, {secs}s (기록 {record_path(tree)})"]
     return rec, lines
@@ -243,22 +322,18 @@ def _verify(qa, cfg):
     miss = []
     if re.search(rf"^\s*-\s*코드:\s*{PASS}", qa, re.M):
         tgt = target(qa)
-        tree = vf_git.tree_of(tgt) if tgt else ""
+        p, rec, tree = find_record(tgt)
         if not tgt:
             miss.append("「QA 결과」 코드 통과인데 대상 commit/tree 없음 — 실행 기록과 대조할 수 없음(qa_run.py)")
         elif not tree:
             miss.append(f"QA 대상 {tgt[:10]}을 찾을 수 없음 — 실행 기록과 대조할 수 없음")
         else:
-            p = record_path(tree)
-            if not os.path.exists(p):
+            if rec is None:
                 miss.append(f"코드 통과의 실행 기록 {p} 없음 — 손으로 쓴 '통과'는 증거가 아니다. python qa_run.py로 돌린다")
             else:
-                try:
-                    with open(p, encoding="utf-8") as f:
-                        rec = json.load(f)
-                except (OSError, ValueError) as e:
+                if rec == "unreadable":
                     rec = None
-                    miss.append(f"실행 기록 {p}을 읽을 수 없음({e}) — python qa_run.py로 다시 돌린다")
+                    miss.append(f"실행 기록 {p}을 읽을 수 없음 — python qa_run.py로 다시 돌린다")
                 if isinstance(rec, dict):
                     if rec.get("tree") != tree:
                         miss.append(f"실행 기록 {p}의 tree({str(rec.get('tree'))[:12]})가 QA 대상 tree({tree[:12]})와 다름")
@@ -306,19 +381,29 @@ def main():
     if mr and not os.path.exists(mr):
         print(f"[qa-run] MR 본문 없음: {mr}", file=sys.stderr)
         sys.exit(2)
-    rec, lines = run(vf_git.config(), red=red)
+    goal = ""
+    if red:
+        import mr_check
+        if not mr:
+            print("[qa-run] --red는 --mr <MR 본문>과 함께 — RED 기록에 골을 묶는다(다른 골·기준의 RED는 merge 증거가 아니다)",
+                  file=sys.stderr)
+            sys.exit(2)
+        with open(mr, encoding="utf-8") as f:
+            goal = mr_check.mr_goal(f.read())
+    rec, lines = run(vf_git.config(), red=red, goal=goal)
     if rec is None:
         print("[qa-run] test_cmd 없음 — 미검증 (.vibe-flow.json에 test_cmd를 둔다. 자동 테스트가 없으면 syntax_check.py)")
         print("- 코드: 미검증 — test_cmd 없음")
         sys.exit(2)
     if red:
         if rec["exit"] == 0:
-            print(f"[qa-run] RED가 아님 — 테스트가 이미 통과 (기록 {record_path(rec['tree'], True)}). 실패하는 테스트를 먼저 쓴다")
+            print(f"[qa-run] RED가 아님 — 테스트가 이미 통과 — 기록하지 않음. 실패하는 테스트를 먼저 쓴다")
             sys.exit(1)
-        if not any(v == "fail" for v in (rec.get("tests") or {}).values()) and not (
-                "passed" in rec and rec["passed"] + rec.get("skipped", 0) < (rec.get("total") or 0)):
-            print(f"[qa-run] RED 아님 — 실행 오류(테스트 실패가 아님): 실패한 테스트를 출력에서 찾지 못함 "
-                  f"(exit {rec['exit']}, 기록 {record_path(rec['tree'], True)})")
+        import mr_check
+        if not lines or not mr_check.red_valid(rec):   # 판정은 red_valid 하나(A11-05)
+            print(f"[qa-run] RED 아님 — 실패한 테스트 이름을 출력에서 찾지 못함(실행 오류이거나 상세 출력이 아님 — "
+                  f"unittest -v · pytest -v · jest --verbose · vitest --reporter=verbose) "
+                  f"(exit {rec['exit']}, 기록하지 않음)")
             sys.exit(1)
         print("[qa-run] RED 증거 — 「QA 결과」에 붙일 줄:\n" + lines[0])
         if mr:

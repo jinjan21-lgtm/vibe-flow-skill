@@ -192,7 +192,8 @@ class CheckedEvidenceTest(C2):
     def test_round_one_without_enough_checked_is_invalid(self):
         self.write("app.py", "def search(q):\n    return q\n")
         self.mr(conds=TWO_CONDS)
-        thin = "ROUND: 1\nRESOLVED: 없음\nCHECKED: 1 — tests/test_app.py::test_partial\nVERDICT: CONFIRM\n"
+        self.write("tests/test_app.py", "def test_partial():\n    pass\n")   # 근거는 실재하는 테스트여야(런 6)
+        thin ="ROUND: 1\nRESOLVED: 없음\nCHECKED: 1 — tests/test_app.py::test_partial\nVERDICT: CONFIRM\n"
         r = self.codex("review.py", "--round", "1", "--mr", "mr.md", reply=thin)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("0건이면 안내 문구", r.stdout + r.stderr)
@@ -298,6 +299,7 @@ class NumberedCheckedTest(C2):
     def setUp(self):
         super().setUp()
         self.write("app.py", "def search(q):\n    return q\n")
+        self.write("tests/test_app.py", "def test_partial():\n    pass\n")
         self.mr(conds=TWO_CONDS)
 
     def round1(self, checked):
@@ -481,6 +483,14 @@ class DesignRecordTest(C2):
         self.mr(confirm=SKIP)
         self.assertEqual(self.stage("build").returncode, 0, self.stage("build").stdout)
 
+    def test_human_verdict_needs_both_d1_and_d2(self):   # 런 6: d2 하나만 남긴 것은 2회를 다 쓴 것이 아니다(B-05와 같다)
+        seed_design(n=2, verdict="CHANGES")
+        self.write("docs/DECISIONS.md", "## D-003 캐시 생략\n- 영향: G-001\n")
+        self.mr(confirm="- 확인 2: blocker 1\n- 사람 결정: D-003 — 없음\n- 판정: 확정 (사람 판정 D-003)")
+        r = self.stage("build")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("d1·d2가 모두", r.stdout)
+
     def test_design_confirm_with_blocker_is_invalid(self):
         self.mr(confirm="(진행 전)")
         r = self.codex("review.py", "--design", "1", "--mr", "mr.md", reply=BLOCKER.replace("F1", "D1") + "VERDICT: CONFIRM\n")
@@ -533,7 +543,9 @@ class ChangeAfterReviewTest(C2):
         for f in ("d1.txt", "d1.meta"):
             os.remove(os.path.join(".vibe", "review", f))
         sh("git", "checkout", "-q", "main", cwd=self.d)                      # 레포 설정(test_cmd)은 기준에 있다
-        self.write(".vibe-flow.json", json.dumps({"base": "main", "test_cmd": f'"{PY}" -c "print(1)"'}))
+        # 통과는 출력에서 읽은 수가 있어야 한다(A9-08) — 가짜 test_cmd도 unittest 요약을 찍는다
+        self.write(".vibe-flow.json", json.dumps({"base": "main", "test_cmd":
+                                                  f'"{PY}" -c "print(\'Ran 1 test in 0.0s\'); print(); print(\'OK\')"'}))
         sh("git", "commit", "-qam", "G-000 test_cmd", cwd=self.d)
         sh("git", "checkout", "-q", "G-001/test", cwd=self.d)
         sh("git", "merge", "-q", "--ff-only", "main", cwd=self.d)
@@ -568,6 +580,7 @@ class ChangeAfterReviewTest(C2):
             self.assertEqual(r.returncode, 1, r.stdout)
             self.assertIn("리뷰 확정 뒤 코드 변경(app.py)", r.stdout)
             self.assertIn("review.py --round 2", r.stdout)
+        seed_review(n=2)   # 유효 라운드는 r1부터 이어져야 한다(r1·r3만이면 연속 아님으로 막힌다)
         seed_review(n=3)
         self.write("app.py", IMPL + "# 3라운드 뒤 수정\n")
         r = self.stage("qa")

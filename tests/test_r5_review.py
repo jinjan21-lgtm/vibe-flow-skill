@@ -442,7 +442,9 @@ class ContractHashTest(R5):
     def setUp(self):
         super().setUp()
         self.write("app.py", IMPL)
-        seed_review(n=1, extra="RESOLVED: 없음\n")
+        # 근거는 테스트 이름 — 위험을 바꿔 표준이 되어도 CHECKED 근거 규칙이 아니라 계약 변경으로 걸리게
+        self.write("tests/test_app.py", "def test_search():\n    pass\n")
+        seed_review(n=1, extra="RESOLVED: 없음\n", evidence="test_search")
         self.mr(review="- 라운드 1: 0\n- 판정: 확정")
 
     def test_contract_change_after_review_is_miss(self):
@@ -506,10 +508,10 @@ class RegressionEvidenceTest(R5):
 class UnverifiedItemsTest(R5):
     """1. 「QA 결과」 '- 미검증·생략 항목과 사유:'는 merge에 필수 — '없음'이거나 항목마다 사람 승인(D-nnn)."""
     QA = "- 대상 tree: 0000000\n- 코드: 통과\n- 브라우저: 해당 없음 — 서버만\n"
-    MSG = "미검증 항목이 남음"
+    MSG = "UNVERIFIED"   # 런 6(C5 충돌 1): 미검증은 결정으로 통과되지 않는다 — 위험 인수는 ACCEPTED-RISK로 남고 막는다
 
     def hit(self):
-        return [x for x in self.miss("merge") if self.MSG in x or "미검증·생략" in x]
+        return [x for x in self.miss("merge") if x.startswith(("UNVERIFIED", "ACCEPTED-RISK")) or "미검증·생략" in x]
 
     def test_missing_line_blocks(self):
         self.mr(qa=self.QA)
@@ -521,19 +523,22 @@ class UnverifiedItemsTest(R5):
 
     def test_listed_item_blocks_without_approval(self):
         self.mr(qa=self.QA + "- 미검증·생략 항목과 사유: 엑셀 내보내기 — 환경 없음")
-        self.assertTrue(any(self.MSG in x and "D-nnn" in x for x in self.miss("merge")), self.miss("merge"))
+        self.assertTrue(any(x.startswith("UNVERIFIED 엑셀 내보내기") and "위험 인수" in x for x in self.miss("merge")),
+                        self.miss("merge"))
 
-    def test_approval_with_decision_covers_item(self):
+    def test_risk_acceptance_is_state_and_still_blocks(self):
         self.write("docs/DECISIONS.md", "# 결정\n\n## D-007 엑셀 생략\n- G-001: 엑셀 내보내기는 다음에\n")
-        self.mr(qa=self.QA + "- 미검증·생략 항목과 사유: 엑셀 내보내기\n- 사람 승인: D-007 — 엑셀 내보내기")
-        self.assertFalse(self.hit(), self.miss("merge"))
+        self.mr(qa=self.QA + "- 미검증·생략 항목과 사유: 엑셀 내보내기\n- 위험 인수: D-007 — 엑셀 내보내기")
+        miss = self.miss("merge")
+        self.assertTrue(any(x.startswith("ACCEPTED-RISK 엑셀 내보내기") for x in miss), miss)
+        self.assertFalse(any(x.startswith("UNVERIFIED") for x in miss), miss)
 
     def test_approval_needs_real_decision_naming_goal(self):
         self.write("docs/DECISIONS.md", "# 결정\n\n## D-007 엑셀 생략\n- G-999: 다른 골\n")
         self.mr(qa=self.QA + "- 미검증·생략 항목과 사유: 엑셀 내보내기\n- 사람 승인: D-007 — 엑셀 내보내기")
-        self.assertTrue(any(self.MSG in x for x in self.miss("merge")), self.miss("merge"))
+        self.assertTrue(any(x.startswith(self.MSG) for x in self.miss("merge")), self.miss("merge"))
         self.replace("- 사람 승인: D-007", "- 사람 승인: D-008")
-        self.assertTrue(any(self.MSG in x for x in self.miss("merge")), self.miss("merge"))
+        self.assertTrue(any(x.startswith(self.MSG) for x in self.miss("merge")), self.miss("merge"))
 
 
 class TrackedIgnoredCodeTest(R5):
@@ -598,16 +603,23 @@ class RedEvidenceTest(R5):
         with open(f".vibe/qa/{name}.json", "w", encoding="utf-8") as f:
             self.json.dump(rec, f)
 
+    GREEN_AT = "2026-10-18T10:00:00.000000+09:00"   # QA(GREEN) 실행 시각 — RED는 이보다 먼저여야 한다
+
     def qa(self, tests=None):
-        rec = {"tree": self.tree, "cmd": "", "exit": 0}
+        rec = {"schema": 2, "tree": self.tree, "cmd": "", "exit": 0, "started": self.GREEN_AT, "passed": 1, "total": 1}
         if tests is not None:
             rec["tests"] = tests
+            rec["passed"] = rec["total"] = len(tests)
         self.dump(self.tree, rec)
 
-    def red(self, tests=None, exit=1, branch=None):
-        rec = {"tree": "a" * 40, "cmd": "", "exit": exit, "branch": branch or self.vf.current_branch()}
-        if tests is not None:
-            rec["tests"] = tests
+    def red(self, tests=None, exit=1, branch=None, goal="G-001", base=None, started="2026-10-18T09:00:00.000000+09:00",
+            schema=2):
+        import mr_check   # RED는 이 골·지금 기준에 묶인다(qa_run --red --mr) — 다른 골·기준의 RED는 증거가 아니다
+        tests = {"t.A.test_x": "fail"} if tests is None else tests   # RED는 실패한 테스트(tests의 fail)가 있어야 한다
+        rec = {"schema": schema, "tree": "a" * 40, "cmd": "", "exit": exit, "branch": branch or self.vf.current_branch(),
+               "goal": goal, "base": mr_check.current_base(self.vf.config()) if base is None else base,
+               "started": started, "tests": tests, "total": len(tests),
+               "passed": sum(v == "ok" for v in tests.values())}
         self.dump("red-" + "a" * 40, rec)
 
     def red_miss(self):
@@ -628,13 +640,31 @@ class RedEvidenceTest(R5):
         self.assertTrue(self.red_miss(), self.miss("merge"))
 
     def test_red_must_fail_and_be_this_branch(self):
-        self.qa()
+        self.qa({"t.A.test_x": "ok"})
         self.red(exit=0)
+        self.assertTrue(self.red_miss(), self.miss("merge"))
+        self.red({})                                            # 실패한 테스트를 못 찾은 실행(명령 오류)은 RED가 아니다
         self.assertTrue(self.red_miss(), self.miss("merge"))
         self.red(branch="G-999/other")
         self.assertTrue(self.red_miss(), self.miss("merge"))
+        self.red(goal="G-099")                                  # 다른 골의 RED
+        self.assertTrue(self.red_miss(), self.miss("merge"))
+        self.red(base="f" * 40)                                 # 리베이스 전 기준의 RED
+        self.assertTrue(self.red_miss(), self.miss("merge"))
+        self.red(schema=1)                                      # 예전 판 RED
+        self.assertTrue(self.red_miss(), self.miss("merge"))
+        self.red(started=self.GREEN_AT)                         # GREEN과 같은 때(먼저가 아님)
+        self.assertTrue(self.red_miss(), self.miss("merge"))
+        self.red(started="2026-10-18T11:00:00.000000+09:00")    # GREEN 뒤에 돌린 RED
+        self.assertTrue(self.red_miss(), self.miss("merge"))
         self.red()
-        self.assertFalse(self.red_miss(), self.miss("merge"))   # QA 기록에 tests가 없으면 exit≠0인 RED 기록만
+        self.assertFalse(self.red_miss(), self.miss("merge"))
+
+    def test_green_without_tests_rejects_red(self):
+        # 예전엔 QA 기록에 tests가 없으면 exit≠0 RED만으로 통과였다 — 이제는 RED→GREEN을 대조할 수 없어 막는다(감사 10)
+        self.qa()
+        self.red()
+        self.assertTrue(self.red_miss(), self.miss("merge"))
 
     def test_light_needs_no_red(self):
         self.replace("- 위험: 정렬 순서 변경", "- 위험: 없음")

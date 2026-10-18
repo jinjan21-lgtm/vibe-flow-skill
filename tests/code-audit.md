@@ -169,3 +169,77 @@
 | B-06 | 명령 오류도 RED로 기록 | 파싱된 실패 테스트 1건 이상만 RED |
 
 함께(품질 평가 C4 대응): 「미검증·생략 항목」이 「없음」이 아니면 사람 승인(D-nnn) 없이는 merge 차단, 추적 중인 무시 파일도 비교(빌드 산출물만 예외), 표준·강화 프로필은 RED 증거(구현 전 실패 → QA에서 통과한 테스트) 필수, UI 캡처를 `<핸드오프>/mr/G-###-evidence/`로 내보내고 새 clone에서 존재 확인.
+
+## 5. 런 6 — 단일 판정 엔진 뒤 재감사 (Aside ChatGPT 추론 High, 새 대화)
+
+런 6 변경: verify-evidence를 별도 검사 묶음에서 **재연(replay)**으로 바꿈 — 커밋된 증거로 임시 clone에 `.vibe/`를 되살려 로컬과 같은 `mr_check --stage merge`. 증거 판 `EVIDENCE_SCHEMA=2`(낮은 판은 LEGACY, 종료 3), 상태 셋(UNVERIFIED·ACCEPTED-RISK·POLICY-PENDING — 모두 차단), CHECKED 근거 실재 검사·근거 테스트 실행 대조, RED의 골·기준 결속. 이식 중 드러난 빈틈(r3 하나만 남긴 사람 판정 — 단일 엔진이 마지막 회차만 봄)은 `[1, 2, 3]` 요구로 막음(설계 d1·d2도).
+
+| 차수 | 직전 지적 | 새 지적 | 처리 |
+|---|---|---|---|
+| 9차 | B-02~B-05 해소, B-06 부분 해소 | A9-01~A9-10 (blocker 5 · major 5) | 아래 |
+
+### 9차 처리 (런 6 — tests/test_r6_audit9.py, 이식 시험 tests/test_r6_engine.py)
+
+| ID | 심각도 | 내용 | 처리 |
+|---|---|---|---|
+| A9-01 | blocker | 빈 값·`<…>` 자리표시 미검증·미확인 줄이 통과 | `_items`가 정확한 `없음`만 빈 것으로, 빈 값·자리표시는 UNVERIFIED·POLICY-PENDING 줄 자체로 |
+| A9-02 | blocker | 없는 테스트 이름으로 해소, 부분 문자열로 다른 항목 결정 재사용, 결정 블록이 항목을 안 적어도 닫힘 | 해소 근거는 실재 + QA 기록에서 ok인 테스트 또는 실재 파일:줄, 항목은 정규화 전체 일치, 결정·위험 인수 블록에 그 항목이 있어야 |
+| A9-03 | blocker | `미충족 — <없는 id>` + CONFIRM, r1 CHECKED 삭제로 근거 대조 회피 | review.py: 미충족은 그 응답의 FINDING id, CONFIRM과 동시 불가. qa·merge: r1 CHECKED가 완료 조건 1..N을 한 번씩, 형식, 미충족 FINDING은 뒤 라운드 RESOLVED로 닫혀야 |
+| A9-04 | blocker | 없는 tree + 지금 코드의 code_tree를 적은 위조 QA·리뷰 기록으로 재연 통과 | 재연이 기본으로 커밋된 코드에서 test_cmd를 다시 돌려 통과·수·테스트별 결과·코드 tree를 기록과 대조(`--no-rerun`은 「실행 사실 미확인」 표시). 리뷰 원문 자체의 위조는 Codex 출력 텍스트라 기계로 증명 못 함 — 남은 한계로 기록 |
+| A9-05 | major | 명령 오류도 RED 파일로 남음, GREEN 뒤 RED도 증거 | RED는 실패 테스트를 찾았을 때만 기록(`red_valid`), merge는 GREEN보다 먼저 돈 RED만 |
+| A9-06 | major | 로컬은 옛 RED로 통과, export는 최신 RED만 → 재연 FAIL | `mr_check.select_red` 하나를 merge·export가 같이 씀(로컬이 고른 RED를 커밋) |
+| A9-07 | major | 추적 중인 .pyc만 바뀌면 로컬 통과·재연 FAIL | `qa_run.code_tree`가 `tracked_artifact`도 뺌(code_diff와 같은 제외 집합). 시험 중 임시 index `git rm --cached` 거부 결함도 드러나 `update-index --force-remove`로 |
+| A9-08 | blocker | 0건 실행·수를 못 읽는 출력이 QA 통과 | `qa_run.ok`가 읽은 수(통과 ≥ 1, 전체 > 0) 요구, syntax_check 출력(`[syntax] N/M 통과`)도 수로 읽음 |
+| A9-09 | major | r1·r2를 지운 r3 CONFIRM으로 장부 회피 | 일반 확정도 유효 라운드가 r1부터 연속 |
+| A9-10 | major | 낮은 판 증거를 로컬은 통과, 재연은 LEGACY | 로컬 merge도 `schema_problems`(설계·리뷰 기록·QA 기록 판) |
+
+RED 확인: 이 차수는 수정과 회귀 시험을 같은 묶음으로 썼다 — 수정 전 코드에서 실패를 따로 돌려 보지 않았다(시험 18개는 수정 뒤 통과). A9-07의 임시 index 결함은 시험이 처음 실패해 드러났다.
+
+| 10차 | A9 해소 6 · 부분 해소 4(A9-03·04·05·06) | A10-01~A10-08 (blocker 3 · major 4 · minor 1) | 아래 |
+
+### 10차 처리 (런 6 — tests/test_r6_audit10.py)
+
+| ID | 심각도 | 내용 | 처리 |
+|---|---|---|---|
+| A10-01 | blocker | merge가 CHECKED 근거의 실재·표준 프로필 테스트 이름을 다시 보지 않음 | `checked_complete_problems`가 조건마다 마지막 근거에 `checked_ref_problems(need_test=프로필≠경량)` |
+| A10-02 | blocker | r1 '미충족'이 RESOLVED만으로 닫히고 실행 근거는 생략 | `checked_map`: '미충족'을 닫는 라운드가 그 조건의 새 CHECKED 근거를 달아야 하고, 그 근거 테스트가 QA에서 ok(`checked_tests`가 마지막 근거). review.py 2·3라운드 CHECKED도 같은 근거 규칙, 프롬프트에 명시 |
+| A10-03 | blocker | 재실행 없는 검증이 종료 0 | `verify-evidence`: 재실행 없으면 UNPROVEN(종료 4, 통과 아님), 0은 `--run-tests` 재실행 일치일 때만 |
+| A10-04 | major | 고른 RED가 없어도 예전 -red.json 사본이 남아 재연이 다르게 판정 | export가 지금 고른 RED가 없으면 사본 삭제 |
+| A10-05 | major | 초 단위 started 문자열 비교로 같은 초의 RED→GREEN 거부 | started 마이크로초, `_before`가 시각으로 비교 |
+| A10-06 | major | 수만으로(수집 오류 포함) RED 인정 | `red_valid`는 실패한 테스트 이름 1개 이상 필수, GREEN에 테스트별 결과가 없으면 RED→GREEN 연결 불가 |
+| A10-07 | major | 제3자 검증이 커밋의 test_cmd를 자동 실행 | 재실행은 `--run-tests`로 명시했을 때만, 재연 merge 통과 뒤에만, 환경변수 허용 목록(`RUN_ENV`). OS 격리는 하지 않음 — 믿지 않는 코드는 격리된 환경에서(문서) |
+| A10-08 | minor | exit 0·수 없음인데 MR 코드 줄 '통과' | 줄 문구도 `qa_run.ok` 기준 |
+
+| 11차 | A10 해소 6(A10-07은 정의된 신뢰 범위 안) · 부분 해소 2(A10-01·02 — 사람 판정 경로), A9 잔여 해소 3 · 부분 1(A9-03, 같은 원인) | A11-01~A11-05 (blocker 1 · major 3 · minor 1) | 아래 |
+
+### 11차 처리 (런 6 — tests/test_r6_audit11.py)
+
+| ID | 심각도 | 내용 | 처리 |
+|---|---|---|---|
+| A10-01·02·A9-03 잔여 | blocker | 사람 판정 경로가 CHECKED 근거 검사를 건너뜀 | `human_review`도 `checked_complete_problems` — 결정 줄의 ID는 '미충족' 지적만 닫고, 완료 조건마다 실재 근거·QA 대조는 그대로 |
+| A11-01 | major | Jest/Vitest 실패 출력에서 RED 불가(이름 파싱 없음, 전부 실패 수 파싱 실패) | `parse_tests`에 jest(`--verbose`, 파일 › describe › 이름, 실패 요약 ●)·vitest(`--reporter=verbose`, 파일 > … > 이름), jest·vitest 수 파서가 'passed' 없는 줄도 |
+| A11-02 | major | r2 이후의 '미충족'(minor라 장부 밖)이 RESOLVED 없이 사라짐 | `checked_map`이 모든 라운드의 조건별 이력을 추적 — 어느 라운드의 미충족이든 그 라운드 FINDING, 뒤 RESOLVED, 그 뒤 새 근거 |
+| A11-03 | major | 테스트가 실행 중 코드를 바꿔도 통과(재실행 대조 포함) | `qa_run.run`이 실행 전·후 코드 tree(기록·산출물 제외)를 비교 — 바뀌면 ok false·`changed_code`, RED로도 안 받음. 재실행 대조는 같은 qa_run을 쓰므로 같은 판정 |
+| A11-04 | blocker | 커밋된 QA 기록 tree 값('../..')으로 재연이 바깥 파일을 덮어씀 | 재연이 쓰기 전에 QA·RED tree를 40자리 16진수로 검증, 도장 branch도 `check-ref-format --branch`·'-' 시작 금지 |
+| A11-05 | minor | 수만 실패를 알리는 출력에서 RED CLI IndexError | main도 `red_valid` 하나로 판정, 명시적 거부 메시지 |
+
+| 12차 | 사람 판정 경로·A11-03·A11-05 해소, A11-01·A11-02·A11-04 부분 해소 | A12-01 (major 1) | 아래 |
+
+### 12차 처리 (런 6 — tests/test_r6_audit12.py)
+
+| ID | 심각도 | 내용 | 처리 |
+|---|---|---|---|
+| A11-01 잔여 | major | JS/TS 테스트 이름을 근거·존재 확인·실행 대조가 못 알아봄(_test_files가 `*.test.ts` 제외) | `JS_TEST_ID`(jest '파일 › 묶음 › 이름', vitest '파일 > …'), `test_exists`가 그 파일의 `it/test('이름')`, `test_match`는 구분자 무관 전체 일치, `_test_files`가 `*.test|spec.*` 포함 |
+| A11-04 잔여 | blocker | 커밋에 든 `.vibe`(심볼릭 링크)를 따라 재연이 바깥에 씀 | 재연은 clone에 `.vibe`가 이미 있으면(링크 포함) 쓰기 전에 FAIL, 새로 만든 뒤 실제 경로가 clone 안인지 확인 |
+| A12-01 | major | 미충족 → 근거 → RESOLVED 순서도 통과(닫히기 전 근거를 사후 승인) | `checked_map`: 지적이 열려 있는 동안 단 근거는 확정 근거가 아님(같은 라운드는 RESOLVED가 먼저). 사람 판정은 결정 시점이 기록 밖이라 미충족 뒤 근거를 받되 실재·QA 대조는 그대로. 2·3라운드 CHECKED 번호 범위도 merge에서 재검사 |
+
+기타: 셸 heredoc의 백슬래시 처리로 스크립트에 제어 문자(\b·\1)가 들어간 편집이 한 번 있었다 — 전 파일 제어 문자 0 확인 뒤 고침(LESSONS 8회째).
+
+| 13차 | 12차 열린 3건 모두 해소 | A13-01·A13-02 (major 2) | 아래 |
+
+### 13차 처리 (런 6 — tests/test_r6_audit13.py)
+
+| ID | 심각도 | 내용 | 처리 |
+|---|---|---|---|
+| A13-01 | major | 사람 판정으로 받은 최종 근거가 QA 실행 대조에서 빠짐(checked_tests가 결정 ID를 모름) | `human_closed_ids(text)` 하나로 결정 ID를 구해 `checked_complete_problems`·`checked_tests`(→`checked_run_problems`)가 같은 최종 근거를 씀 |
+| A13-02 | major | 쉼표·괄호가 든 JS 테스트 이름을 잘라 다른(통과한) 테스트로 대체 | JS 식별자는 파일부터 칸(';'·줄 끝) 끝까지, 끝의 '(파일:줄)'만 뗌 — 이름 중간에서 자르지 않고 전체 일치 |

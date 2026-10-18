@@ -36,7 +36,7 @@ team-handoff `SKILL.md`, `CLAUDE.md`, `AGENTS.md`에는 골 ID 표기와 `handof
 
 설치 확인: `python $S/scripts/handoff.py precheck --run-tests` — 마지막에 착수 가능성(git·python·codex PATH, `test_cmd`, 기준 테스트 결과)이 나온다. Codex는 면제 없이 필수(골 판정·설계 확인·리뷰), 추적 파일에 커밋 안 된 변경이 있어도 착수 불가다. `착수 불가`면 그 항목부터 고친다.
 
-제3자 재검증(리뷰어·감사): 원격에서 새로 `git clone`한 뒤 `python <vibe-flow>/scripts/handoff.py verify-evidence G-### [--commit <기록 커밋>]`. `.vibe/` 없이 커밋된 MR 사본·리뷰 원문·QA 기록만으로 PASS/FAIL을 낸다(QA 기록 cmd = 커밋된 `test_cmd`, QA tree 뒤 코드 변경 없음 포함).
+제3자 재검증(리뷰어·감사): 원격에서 새로 `git clone`한 뒤 `python <vibe-flow>/scripts/handoff.py verify-evidence G-### [--commit <기록 커밋>]`. 커밋된 증거만으로 임시 clone에 `.vibe/`를 되살려 로컬과 같은 merge 검사를 돌린다(재연 — qa-gate.md 「결과 등록」). `--run-tests`면 커밋된 코드에서 테스트도 다시 돌린다(커밋의 test_cmd 실행 — 믿는 코드만). 종료 코드: 통과 0(재실행 일치), 실패 1, 옛 판 증거 3(`LEGACY` — 재검증 대상), 재실행 안 함 4(`UNPROVEN` — 통과 아님).
 
 ## UI가 있는 레포
 

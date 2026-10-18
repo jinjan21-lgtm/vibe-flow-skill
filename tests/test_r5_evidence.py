@@ -1,5 +1,6 @@
 """R5 회귀: QA 대상 파싱이 주석을 무시(H-01), 여러 골 MR의 export-evidence(H-02), 다른 브랜치·기준 리뷰 제외(H-03),
-새 clone에서 커밋만으로 증거 재검증(verify-evidence), precheck 착수 가능성, QA 테스트 수 파싱.
+precheck 착수 가능성, QA 테스트 수 파싱, RED 기록(--red --mr: goal·base).
+새 clone 재검증(verify-evidence 재연)은 실제 흐름으로 tests/test_r6_engine.py가 본다(로컬 merge와 같은 판정).
 실행: python -m unittest tests/test_r5_evidence.py -v (레포 루트)"""
 import importlib
 import json
@@ -63,7 +64,8 @@ class QaTargetCommentTest(PersonalRepo):
             import vf_git
             importlib.reload(qa_run)
             tree = vf_git.snapshot()
-            write(self.d, f".vibe/qa/{tree}.json", json.dumps({"tree": tree, "cmd": "t", "exit": 0}))
+            write(self.d, f".vibe/qa/{tree}.json", json.dumps({"schema": 2, "tree": tree, "cmd": "t", "exit": 0,
+                                                               "passed": 1, "total": 1}))
             qa = f"<!-- - 대상 tree: {COMMENT_SHA} -->\n- 대상 tree: {tree}\n- 코드: 통과 — x\n"
             self.assertEqual(qa_run.verify(qa, vf_git.config()), [])
         finally:
@@ -128,117 +130,6 @@ class ExportMultiGoalTest(PersonalRepo):
         self.assertIn("지금 리뷰", rv)
         self.assertNotIn("다른 브랜치 리뷰", rv)
         self.assertNotIn("옛 기준 설계", rv)
-
-
-# ---------- 새 clone 재검증 ----------
-REVIEW_OK = "# G-001 리뷰 원문\n\n## r1.txt (코드 리뷰)\n\n````text\nFINDING: F1 | major | x\nVERDICT: CHANGES\n````\n\n" \
-            "## r2.txt (코드 리뷰)\n\n````text\nRESOLVED: F1\nVERDICT: CONFIRM\n````\n"
-
-
-def stamped(review, tree, mr):
-    """리뷰 원문 사본의 '## rN.txt' 제목마다 도장(export-evidence와 같은 형식)을 붙인다 — 이미 있으면 자리표시만 채운다."""
-    import mr_check
-    if "<!-- stamp" not in review:
-        review = re.sub(r"^(## r\d+\.txt[^\n]*\n)", lambda m: m.group(1) + STAMP, review, flags=re.M)
-    return (review.replace("{tree}", tree).replace("{conds}", mr_check.completion_hash(mr))
-            .replace("{contract}", mr_check.contract_hash(mr)))
-
-
-STAMP = "<!-- stamp\ntree: {tree}\ngoal: G-001\nconds: {conds}\ncontract: {contract}\n-->\n"
-
-
-class VerifyEvidenceCloneTest(unittest.TestCase):
-    """기록 커밋을 만든 레포를 새로 clone해(.vibe 없음) 커밋된 파일만으로 증거를 다시 검사한다."""
-    clone_args = ()
-
-    def setUp(self):
-        self.root = tempfile.mkdtemp(prefix="vf-r5-")
-        self.d = os.path.join(self.root, "repo")
-        os.makedirs(self.d)
-        init_repo(self.d)
-        for p, t in {"docs/REMAINING.md": "# 남은 업무\n\n- [ ] G-001 거래처 검색\n", "docs/WORKLOG.md": "# 작업 기록\n",
-                     "docs/NORTHSTAR.md": "# 노스스타\n## 목적\n검색\n",
-                     "docs/goals/G-001-search.md": GOAL.format(gid="G-001", st="active"),
-                     "app.py": "# app\n", ".gitignore": ".vibe/\n",
-                     ".vibe-flow.json": json.dumps({"base": "main", "test_cmd": "python -m unittest"})}.items():
-            write(self.d, p, t)
-        sh("git", "add", "-A", cwd=self.d)
-        sh("git", "commit", "-qm", "seed", cwd=self.d)
-        sh("git", "checkout", "-q", "-b", "feat/G-001-search", cwd=self.d)
-
-    def tearDown(self):
-        shutil.rmtree(self.root, ignore_errors=True)
-
-    def record(self, mr=MR_FILE, qa=None, review=REVIEW_OK, late_code=False, decisions=None):
-        write(self.d, "app.py", "def search(q):\n    return q\n", "a")
-        sh("git", "commit", "-qam", "G-001 거래처 검색", cwd=self.d)
-        tree = sh("git", "rev-parse", "HEAD^{tree}", cwd=self.d).stdout.strip()
-        write(self.d, "docs/WORKLOG.md", "\n## 2026-10-17 G-001 거래처 검색\n", "a")
-        write(self.d, "docs/mr/G-001.md", mr.replace("{tree}", tree))
-        rec = {"tree": tree, "cmd": "python -m unittest", "exit": 0, **(qa or {})}
-        write(self.d, "docs/mr/G-001-qa.json", json.dumps(rec))
-        write(self.d, "docs/mr/G-001-review.md", stamped(review, tree, mr.replace("{tree}", tree)))
-        if decisions:
-            write(self.d, "docs/DECISIONS.md", decisions)
-        if late_code:   # QA 뒤 코드 변경을 기록 커밋에 섞음
-            write(self.d, "app.py", "# 몰래 바꿈\n", "a")
-        sh("git", "add", "-A", cwd=self.d)
-        sh("git", "commit", "-q", "--amend", "--no-edit", cwd=self.d)
-        clone = os.path.join(self.root, "clone")
-        sh("git", "clone", "-q", *self.clone_args, "-b", "feat/G-001-search", self.d, clone, cwd=self.root)
-        self.assertFalse(os.path.exists(os.path.join(clone, ".vibe")))
-        return subprocess.run([PY, os.path.join(SCRIPTS, "handoff.py"), "verify-evidence", "G-001"], cwd=clone,
-                              capture_output=True, text=True, encoding="utf-8")
-
-    def test_pass(self):
-        r = self.record()
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("PASS", r.stdout)
-        self.assertNotIn("FAIL", r.stdout)
-
-    def test_qa_exit_1(self):
-        r = self.record(qa={"exit": 1})
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*exit 1")
-
-    def test_qa_cmd_differs_from_config(self):
-        r = self.record(qa={"cmd": "echo ok"})
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*test_cmd")
-
-    def test_unchecked_condition(self):
-        r = self.record(mr=MR_FILE.replace("- [x] 부분 일치 검색", "- [x] 부분 일치 검색\n- [ ] 정렬"))
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*완료 조건")
-
-    def test_last_verdict_changes(self):
-        r = self.record(review=REVIEW_OK + "\n## r3.txt (코드 리뷰)\n\n````text\nVERDICT: CHANGES\n````\n")
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*VERDICT")
-
-    def test_blocker_in_last_round(self):
-        r = self.record(review=REVIEW_OK.replace("RESOLVED: F1\n", "RESOLVED: F1\nFINDING: F2 | blocker | y\n"))
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*blocker")
-
-    def test_code_changed_after_qa(self):
-        r = self.record(late_code=True)
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*app\.py")
-
-    def test_human_decision_needs_committed_decision(self):
-        mr = MR_FILE.replace("- 판정: 확정\n## QA", "- 판정: 확정 (사람 판정 D-007)\n## QA")
-        self.assertIn("D-007", mr)
-        r = self.record(mr=mr)
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*D-007")
-
-    def test_human_decision_committed_passes(self):
-        mr = MR_FILE.replace("- 판정: 확정\n## QA", "- 판정: 확정 (사람 판정 D-007)\n## QA")
-        mr = mr.replace("- 판정: 확정 (사람", "- 사람 결정: D-007 — 없음 (tree {tree})\n- 판정: 확정 (사람")
-        rv = review_rounds("VERDICT: CHANGES\n", "VERDICT: CHANGES\n", "VERDICT: CHANGES\n")
-        r = self.record(mr=mr, review=rv, decisions="# 결정\n\n## D-007 G-001 리뷰 보류 해제\n- 사람이 확정\n")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
 # ---------- precheck 착수 가능성 ----------
@@ -338,82 +229,6 @@ class QaCountTest(unittest.TestCase):
         finally:
             os.chdir(old)
             shutil.rmtree(d, ignore_errors=True)
-
-
-# ---------- 외부 감사 G-01: 진짜 새 clone(--no-local) — QA tree 객체가 없어도 재구성으로 ----------
-class VerifyEvidenceNoLocalTest(VerifyEvidenceCloneTest):
-    """--no-local clone은 어느 커밋에서도 닿지 않는 QA tree(amend 전 tree)를 받지 않는다. 위 시험을 모두 이 조건에서."""
-    clone_args = ("--no-local",)
-
-    def test_qa_tree_object_absent_in_clone(self):
-        self.record()   # verify가 재구성한 tree를 써 넣으므로 검사 전 clone을 따로 본다
-        clone = os.path.join(self.root, "clone2")
-        sh("git", "clone", "-q", "--no-local", "-b", "feat/G-001-search", self.d, clone, cwd=self.root)
-        tree = json.loads(open(os.path.join(clone, "docs/mr/G-001-qa.json"), encoding="utf-8").read())["tree"]
-        self.assertNotEqual(sh("git", "cat-file", "-e", tree, cwd=clone, ok=False).returncode, 0)
-
-    def test_real_qa_run_flow(self):   # 코드 변경 → qa_run → 기록을 같은 커밋에 amend → 새 clone verify
-        write(self.d, ".gitignore", ".vibe/\n__pycache__/\n")
-        write(self.d, "test_app.py", "import unittest\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n")
-        write(self.d, "app.py", "def search(q):\n    return q\n", "a")
-        sh("git", "add", "-A", cwd=self.d)
-        sh("git", "commit", "-qm", "G-001 거래처 검색", cwd=self.d)
-        q = subprocess.run([PY, os.path.join(SCRIPTS, "qa_run.py")], cwd=self.d, capture_output=True, text=True,
-                           encoding="utf-8")
-        self.assertEqual(q.returncode, 0, q.stdout + q.stderr)
-        tree = re.search(r"대상 tree: ([0-9a-f]{40})", q.stdout).group(1)
-        write(self.d, "docs/WORKLOG.md", "\n## 2026-10-17 G-001 거래처 검색\n", "a")
-        mr = MR_FILE.replace("{tree}", tree).replace("3/3", "1/1")
-        write(self.d, "docs/mr/G-001.md", mr)
-        with open(os.path.join(self.d, f".vibe/qa/{tree}.json"), encoding="utf-8") as f:
-            write(self.d, "docs/mr/G-001-qa.json", f.read())
-        write(self.d, "docs/mr/G-001-review.md", stamped(REVIEW_OK, tree, mr))
-        sh("git", "add", "-A", cwd=self.d)
-        sh("git", "commit", "-q", "--amend", "--no-edit", cwd=self.d)
-        clone = os.path.join(self.root, "clone")
-        sh("git", "clone", "-q", "--no-local", "-b", "feat/G-001-search", self.d, clone, cwd=self.root)
-        r = subprocess.run([PY, os.path.join(SCRIPTS, "handoff.py"), "verify-evidence", "G-001"], cwd=clone,
-                           capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("재구성 일치", r.stdout)
-
-
-# ---------- 외부 감사 G-02: 리뷰 원문 전 회차 지적 장부 ----------
-def review_rounds(*bodies):
-    return "# G-001 리뷰 원문\n\n" + "".join(f"## r{i}.txt (코드 리뷰)\n\n````text\n{b}````\n\n"
-                                         for i, b in enumerate(bodies, 1))
-
-
-class VerifyEvidenceLedgerTest(VerifyEvidenceCloneTest):
-    def test_blocker_open_from_earlier_round(self):   # 감사 사례: r1 CHANGES blocker F1, r2 CONFIRM인데 RESOLVED 없음
-        r = self.record(review=review_rounds("FINDING: F1 | blocker | x\nVERDICT: CHANGES\n", "VERDICT: CONFIRM\n"))
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*F1")
-
-    def test_major_open_from_earlier_round(self):
-        r = self.record(review=review_rounds("FINDING: M1 | major | x\nVERDICT: CHANGES\n",
-                                             "RESOLVED: 없음\nVERDICT: CONFIRM\n"))
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*M1")
-
-    def test_major_carried_closes(self):
-        r = self.record(review=review_rounds("FINDING: M1 | major | x\nVERDICT: CHANGES\n",
-                                             "CARRY: M1 — 골 후보 나중에\nVERDICT: CONFIRM\n"))
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-    def test_human_decision_must_cover_open(self):
-        mr = MR_FILE.replace("- 판정: 확정\n## QA", "- 판정: 확정 (사람 판정 D-007)\n## QA")
-        rv = review_rounds("FINDING: F1 | blocker | x\nVERDICT: CHANGES\n", "VERDICT: CHANGES\n", "VERDICT: CHANGES\n")
-        r = self.record(mr=mr, review=rv, decisions="# 결정\n\n## D-007 G-001 리뷰 보류 해제\n- 사람이 확정\n")
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*F1")
-
-    def test_human_decision_covering_open_passes(self):
-        mr = MR_FILE.replace("- 판정: 확정\n## QA", "- 판정: 확정 (사람 판정 D-007)\n## QA")
-        mr = mr.replace("- 판정: 확정 (사람", "- 사람 결정: D-007 — F1 (tree {tree})\n- 판정: 확정 (사람")
-        rv = review_rounds("FINDING: F1 | blocker | x\nVERDICT: CHANGES\n", "VERDICT: CHANGES\n", "VERDICT: CHANGES\n")
-        r = self.record(mr=mr, review=rv, decisions="# 결정\n\n## D-007 G-001 리뷰 보류 해제\n- 사람이 F1 수용\n")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
 # ---------- 외부 감사 G-06: python 없음도 착수 불가 ----------
@@ -610,9 +425,24 @@ class QaRedTest(QaRunRepo):
         self.assertIn("<!-- - RED: 예시 -->", qa)
         self.assertFalse(os.path.exists(os.path.join(self.d, ".vibe", "qa", f"{m.group(2)}.json")))
 
+    def red_mr(self):
+        write(self.d, "mr.md", "## 골\nG-001 거래처 검색\n## 완료 조건\n- [ ] x\n\n## QA 결과\n(진행 전)\n")
+        return "mr.md"
+
+    def test_red_records_goal_and_base(self):   # merge는 이 골·이 기준의 RED만 증거로 쓴다
+        import vf_git
+        self.cfg(fake_cmd(UT_V, 1))
+        r = self.qa("--red", "--mr", self.red_mr())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        tree = re.search(r"red-([0-9a-f]{40})\.json", r.stdout).group(1)
+        rec = self.rec(f"red-{tree}.json")
+        base = sh("git", "rev-parse", "main^{tree}", cwd=self.d).stdout.strip()
+        self.assertEqual((rec["goal"], rec["base"], rec["branch"], rec["schema"]),
+                         ("G-001", base, "main", vf_git.EVIDENCE_SCHEMA))
+
     def test_red_but_passed(self):
         self.cfg(fake_cmd("Ran 1 test in 0s\n\nOK\n", 0))
-        r = self.qa("--red")
+        r = self.qa("--red", "--mr", self.red_mr())
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("RED가 아님 — 테스트가 이미 통과", r.stdout + r.stderr)
 
@@ -621,20 +451,30 @@ class ExportRedTest(PersonalRepo):
     def seed(self):
         tree = "c" * 40
         write(self.d, ".vibe/mr-G-001.md", MR_FILE.replace("{tree}", tree))
-        write(self.d, f".vibe/qa/{tree}.json", json.dumps({"tree": tree, "cmd": "t", "exit": 0}))
+        # GREEN: RED의 실패 테스트가 ok이고(tests), 모든 RED보다 뒤에 돌았다(started) — select_red가 RED→GREEN을 대조한다
+        write(self.d, f".vibe/qa/{tree}.json", json.dumps(
+            {"schema": 2, "tree": tree, "cmd": "t", "exit": 0, "passed": 1, "total": 1,
+             "started": "2026-10-18T13:00:00.000000+09:00", "tests": {"tests.test_app.T.test_search": "ok"}}))
         br, base = ctx(self.d)
         write(self.d, ".vibe/review/r1.txt", "VERDICT: CONFIRM\n")
         write(self.d, ".vibe/review/r1.tree", f"{tree}\ngoal: G-001\nbranch: {br}\nbase: {base}\n")
 
-    def red(self, ch, branch, started):
+    def red(self, ch, branch, started, goal="G-001", base=None):
         write(self.d, f".vibe/qa/red-{ch * 40}.json", json.dumps(
-            {"tree": ch * 40, "cmd": "t", "exit": 1, "branch": branch, "started": started}))
+            {"tree": ch * 40, "cmd": "t", "exit": 1, "branch": branch, "started": started, "goal": goal,
+             "base": ctx(self.d)[1] if base is None else base, "schema": 2,
+             # 실패한 테스트가 있어야 RED다(red_valid — 명령 오류는 RED가 아님)
+             "passed": 0, "total": 1, "tests": {"tests.test_app.T.test_search": "fail"}}))
 
-    def test_export_copies_latest_red_of_branch(self):
+    def test_export_copies_latest_red_of_branch(self):   # 같은 브랜치·이 골·지금 기준의 가장 최근 RED만
         sh("git", "checkout", "-q", "-b", "feat/G-001-search", cwd=self.d)
         self.red("d", "other", "2026-10-18T10:00:00+09:00")
         self.red("e", "feat/G-001-search", "2026-10-18T09:00:00+09:00")
         self.red("f", "feat/G-001-search", "2026-10-18T09:30:00+09:00")
+        self.red("a", "feat/G-001-search", "2026-10-18T11:00:00+09:00", goal="G-099")   # 다른 골
+        self.red("b", "feat/G-001-search", "2026-10-18T11:30:00+09:00", base="e" * 40)   # 리베이스 전 기준
+        self.red("9", "feat/G-001-search", "2026-10-18T12:00:00+09:00", goal="")   # 골 표시 없는 예전 기록
+        self.red("8", "feat/G-001-search", "2026-10-18T14:00:00+09:00")   # GREEN(13:00) 뒤에 돌린 RED
         self.seed()
         r = self.ho("export-evidence", "G-001")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -643,25 +483,10 @@ class ExportRedTest(PersonalRepo):
 
     def test_export_without_red_ok(self):
         self.seed()
+        write(self.d, "docs/mr/G-001-red.json", "{}\n")   # 예전에 내보낸 RED 사본 — 지금 고른 RED가 없으면 지운다
         r = self.ho("export-evidence", "G-001")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertFalse(os.path.exists(os.path.join(self.d, "docs", "mr", "G-001-red.json")))
-
-
-class VerifyEvidenceRedTest(VerifyEvidenceCloneTest):
-    def test_red_absent_info(self):
-        r = self.record()
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertRegex(r.stdout, r"(?m)^INFO G-001 RED 기록 .*없음")
-
-    def test_red_present_info(self):
-        write(self.d, "docs/mr/G-001-red.json", json.dumps(
-            {"tree": "e" * 40, "cmd": "python -m unittest", "exit": 1,
-             "tests": {"a.T.test_x": "fail", "a.T.test_y": "ok"}}))
-        r = self.record()
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertRegex(r.stdout, r"(?m)^INFO G-001 RED 기록 docs/mr/G-001-red\.json — eeeeeeeeeeee exit 1, "
-                                   r"1개 실패\(a\.T\.test_x\)")
 
 
 # ---------- 착수 가능성: 커밋 안 된 변경 ----------
@@ -691,80 +516,6 @@ class IsRecordPlanTextTest(unittest.TestCase):
         self.assertFalse(mr_check.is_record(f, cfg, plan="# 계획\n"))
 
 
-# ---------- 외부 감사 E-02~E-05: 새 clone 재검증이 로컬 게이트와 같은 규칙 ----------
-HUMAN = "- 사람 결정: D-007 — 없음 (tree {tree})\n- 판정: 확정 (사람 판정 D-007)\n## QA"
-DEC = "# 결정\n\n## D-007 G-001 리뷰 보류 해제\n- 사람이 확정\n"
-
-
-class VerifyEvidenceGateTest(VerifyEvidenceCloneTest):
-    clone_args = ("--no-local",)
-
-    def seed_tree(self):
-        return sh("git", "rev-parse", "main^{tree}", cwd=self.d).stdout.strip()
-
-    def test_missing_stamp_fails(self):   # E-02
-        r = self.record(review=REVIEW_OK.replace("## r2.txt (코드 리뷰)\n", "## r2.txt (코드 리뷰)\n<!-- stamp\n-->\n"))
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*도장")
-
-    def test_contract_hash_mismatch(self):   # E-02
-        st = "<!-- stamp\ntree: {tree}\nconds: {conds}\ncontract: 0000000000000000\n-->\n"
-        r = self.record(review=REVIEW_OK.replace("## r2.txt (코드 리뷰)\n", "## r2.txt (코드 리뷰)\n" + st))
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*계약")
-
-    def test_conds_hash_mismatch(self):   # E-02
-        st = "<!-- stamp\ntree: {tree}\nconds: 0000000000000000\ncontract: {contract}\n-->\n"
-        r = self.record(review=REVIEW_OK.replace("## r2.txt (코드 리뷰)\n", "## r2.txt (코드 리뷰)\n" + st))
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*완료 조건")
-
-    def test_reviewed_tree_code_differs(self):   # E-02: 리뷰가 본 tree(seed)와 QA 코드가 다름
-        st = f"<!-- stamp\ntree: {self.seed_tree()}\nconds: {{conds}}\ncontract: {{contract}}\n-->\n"
-        r = self.record(review=REVIEW_OK.replace("## r2.txt (코드 리뷰)\n", "## r2.txt (코드 리뷰)\n" + st))
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*리뷰.*tree.*app\.py")
-
-    def test_design_only_not_code_review(self):   # E-03
-        r = self.record(review="# 원문\n\n## d1.txt (설계 확인)\n\n````text\nVERDICT: CONFIRM\n````\n")
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*rN\.txt")
-
-    def test_empty_completion_item(self):   # E-04
-        r = self.record(mr=MR_FILE.replace("- [x] 부분 일치 검색", "- [x] 부분 일치 검색\n- [x] "))
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*빈 항목")
-
-    def test_goal_not_in_mr(self):   # E-04
-        r = self.record(mr=MR_FILE.replace("## 골\nG-001 거래처 검색", "## 골\nG-002 거래처 검색"))
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*「골」.*G-001")
-
-    def test_human_needs_r3(self):   # E-05
-        r = self.record(mr=MR_FILE.replace("- 판정: 확정\n## QA", HUMAN), decisions=DEC)
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*r3")
-
-    def test_human_needs_decision_line(self):   # E-05
-        rv = review_rounds("VERDICT: CHANGES\n", "VERDICT: CHANGES\n", "VERDICT: CHANGES\n")
-        r = self.record(mr=MR_FILE.replace("- 판정: 확정\n## QA", "- 판정: 확정 (사람 판정 D-007)\n## QA"),
-                        review=rv, decisions=DEC)
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*사람 결정: D-007")
-
-    def test_human_decision_tree_mismatch(self):   # E-05
-        rv = review_rounds("VERDICT: CHANGES\n", "VERDICT: CHANGES\n", "VERDICT: CHANGES\n")
-        mr = MR_FILE.replace("- 판정: 확정\n## QA", HUMAN.replace("{tree}", "abcdef1234567"))
-        r = self.record(mr=mr, review=rv, decisions=DEC)
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*사람 결정 D-007.*tree")
-
-    def test_human_full_passes(self):
-        rv = review_rounds("VERDICT: CHANGES\n", "VERDICT: CHANGES\n", "VERDICT: CHANGES\n")
-        r = self.record(mr=MR_FILE.replace("- 판정: 확정\n## QA", HUMAN), review=rv, decisions=DEC)
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-
-
 class ExportStampTest(PersonalRepo):   # E-02: export가 회차 도장을 사본에 넣는다
     def test_stamp_in_review_copy(self):
         tree = "c" * 40
@@ -777,50 +528,6 @@ class ExportStampTest(PersonalRepo):   # E-02: export가 회차 도장을 사본
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         rv = open(os.path.join(self.d, "docs/mr/G-001-review.md"), encoding="utf-8").read()
         self.assertRegex(rv, rf"## r1\.txt[^\n]*\n<!-- stamp\ntree: {tree}\n(?:.*\n)*?conds: c1\ncontract: k1\n")
-
-
-# ---------- 외부 감사 G-01 잔여: QA 전 기록이 바뀌어도 코드 tree로 대조 ----------
-class VerifyCodeTreeTest(VerifyEvidenceCloneTest):
-    clone_args = ("--no-local",)
-
-    def flow(self, late=False):
-        write(self.d, ".gitignore", ".vibe/\n__pycache__/\n")
-        write(self.d, "test_app.py", "import unittest\n\n\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n")
-        write(self.d, "app.py", "def search(q):\n    return q\n", "a")
-        write(self.d, "docs/REMAINING.md", "# 남은 업무\n\n- [~] G-001 거래처 검색 (착수 @alice 2026-10-17)\n")
-        sh("git", "add", "-A", cwd=self.d)
-        sh("git", "commit", "-qm", "G-001 거래처 검색", cwd=self.d)
-        q = subprocess.run([PY, os.path.join(SCRIPTS, "qa_run.py")], cwd=self.d, capture_output=True, text=True,
-                           encoding="utf-8")
-        self.assertEqual(q.returncode, 0, q.stdout + q.stderr)
-        tree = re.search(r"대상 tree: ([0-9a-f]{40})", q.stdout).group(1)
-        with open(os.path.join(self.d, f".vibe/qa/{tree}.json"), encoding="utf-8") as f:
-            rec = f.read()
-        self.assertIn("code_tree", json.loads(rec))
-        write(self.d, "docs/REMAINING.md", "# 남은 업무\n\n- [x] G-001 거래처 검색 (@alice 2026-10-17)\n")
-        write(self.d, "docs/WORKLOG.md", "\n## 2026-10-17 G-001 거래처 검색\n", "a")
-        mr = MR_FILE.replace("{tree}", tree).replace("3/3", "1/1")
-        write(self.d, "docs/mr/G-001.md", mr)
-        write(self.d, "docs/mr/G-001-qa.json", rec)
-        write(self.d, "docs/mr/G-001-review.md", stamped(REVIEW_OK, tree, mr))
-        if late:
-            write(self.d, "app.py", "# 몰래\n", "a")
-        sh("git", "add", "-A", cwd=self.d)
-        sh("git", "commit", "-q", "--amend", "--no-edit", cwd=self.d)
-        clone = os.path.join(self.root, "clone")
-        sh("git", "clone", "-q", "--no-local", "-b", "feat/G-001-search", self.d, clone, cwd=self.root)
-        return subprocess.run([PY, os.path.join(SCRIPTS, "handoff.py"), "verify-evidence", "G-001"], cwd=clone,
-                              capture_output=True, text=True, encoding="utf-8")
-
-    def test_records_changed_before_qa(self):
-        r = self.flow()
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("코드 tree", r.stdout)
-
-    def test_late_code_fails(self):
-        r = self.flow(late=True)
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL.*코드 tree")
 
 
 # ---------- 외부 감사 G-07 잔여: 정의만 테스트로 센다 ----------
@@ -904,33 +611,6 @@ class ExportCaptureTest(ExportRedTest):
         self.assertNotIn(".vibe/qa/shot.png", out)
 
 
-class VerifyCaptureCloneTest(VerifyEvidenceCloneTest):
-    clone_args = ("--no-local",)
-
-    def mr(self, link):
-        return MR_FILE.replace(NO_BROWSER, "- 브라우저: 통과 — 검색 화면 확인\n" + link)
-
-    def stage(self, p):   # export-evidence처럼 기록 커밋에만 더한다(--no-local: QA tree 재구성은 <핸드오프>/mr/ 전부를 기록으로)
-        write(self.d, p, "PNG")
-
-    def test_committed_capture_passes(self):
-        self.stage("docs/mr/G-001-evidence/shot.png")
-        r = self.record(mr=self.mr("- 증거: ![A1](G-001-evidence/shot.png)\n"))
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertRegex(r.stdout, r"PASS G-001 캡처 증거")
-
-    def test_missing_capture_fails(self):
-        self.stage("docs/mr/G-001-evidence/shot.png")
-        r = self.record(mr=self.mr("- 증거: ![A1](G-001-evidence/shot.png) ![A2](G-001-evidence/gone.png)\n"))
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL G-001 캡처 증거.*캡처 증거 없음\(새 clone\).*gone\.png")
-
-    def test_no_capture_link_fails(self):
-        r = self.record(mr=self.mr(""))
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertIn("캡처 증거 없음(새 clone)", r.stdout)
-
-
 # ---------- B-02: 전부 건너뜀은 exit 0이어도 통과가 아니다(ok) ----------
 class QaOkFieldTest(QaRunRepo):
     def test_ok_recorded(self):
@@ -956,22 +636,12 @@ class QaOkFieldTest(QaRunRepo):
             os.chdir(old)
 
 
-class VerifyEvidenceSkipTest(VerifyEvidenceCloneTest):
-    def test_all_skipped_fails(self):
-        r = self.record(qa={"passed": 0, "total": 2, "skipped": 2})
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL G-001 QA 통과")
-
-    def test_ok_false_fails(self):
-        r = self.record(qa={"ok": False})
-        self.assertEqual(r.returncode, 1, r.stdout)
-
-
 class QaOkHelperTest(unittest.TestCase):   # check-record(qa_record_missing)도 이 판정을 쓴다
     def test_qa_ok(self):
         import handoff
         importlib.reload(handoff)
-        self.assertTrue(handoff.qa_ok({"exit": 0}))
+        self.assertTrue(handoff.qa_ok({"exit": 0, "passed": 1, "total": 1}))
+        self.assertFalse(handoff.qa_ok({"exit": 0}))   # 수를 읽을 수 없는 실행은 통과가 아니다(A9-08)
         self.assertFalse(handoff.qa_ok({"exit": 0, "passed": 0, "total": 3}))
         self.assertFalse(handoff.qa_ok({"exit": 0, "ok": False}))
         self.assertFalse(handoff.qa_ok({"exit": 1}))
@@ -995,30 +665,12 @@ class CheckRecordSkipTest(PersonalRepo):
         self.assertIn("통과가 아님", r.stdout)
 
 
-# ---------- B-04: 판정 회차 도장의 goal에 그 골이 있어야 한다 ----------
-class VerifyEvidenceStampGoalTest(VerifyEvidenceCloneTest):
-    def test_other_goal_stamp_fails(self):
-        r = self.record(review=REVIEW_OK.replace("## r2.txt (코드 리뷰)\n", "## r2.txt (코드 리뷰)\n"
-                                                 + STAMP.replace("G-001", "G-009")))
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL G-001 판정 회차 도장 goal")
-
-
-# ---------- B-05: 사람 판정은 r1·r2·r3 연속 뒤에만 ----------
-class VerifyEvidenceHumanRoundsTest(VerifyEvidenceCloneTest):
-    def test_lone_r3_fails(self):
-        mr = MR_FILE.replace("- 판정: 확정\n## QA", "- 사람 결정: D-007 — 없음 (tree {tree})\n- 판정: 확정 (사람 판정 D-007)\n## QA")
-        rv = "# G-001 리뷰 원문\n\n## r3.txt (코드 리뷰)\n\n````text\nVERDICT: CHANGES\n````\n"
-        r = self.record(mr=mr, review=rv, decisions="# 결정\n\n## D-007 G-001 리뷰 보류 해제\n- 사람이 확정\n")
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertRegex(r.stdout, r"FAIL G-001 사람 판정 D-007.*r1·r2·r3")
-
-
 # ---------- B-06: 실행 오류는 RED가 아니다 ----------
 class QaRedCrashTest(QaRunRepo):
     def test_crash_not_red(self):
         self.cfg(fake_cmd("Traceback (most recent call last):\nImportError: x\n", 1))
-        r = self.qa("--red")
+        write(self.d, "mr.md", "## 골\nG-001 거래처 검색\n## QA 결과\n(진행 전)\n")
+        r = self.qa("--red", "--mr", "mr.md")
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertIn("RED 아님 — 실행 오류(테스트 실패가 아님)", r.stdout + r.stderr)
 

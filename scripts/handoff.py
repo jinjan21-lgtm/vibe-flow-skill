@@ -15,10 +15,13 @@
                                                    d*·r*.txt → <핸드오프>/mr/G-###.md·-qa.json·-review.md (기록 전에).
                                                    「골」이 여럿이면 골마다 쓴다. 리뷰 원문은 도장(goal·branch·base)이
                                                    이 MR 골·지금 브랜치·지금 기준과 같은 회차만
-  python handoff.py verify-evidence [G-###] [--commit <sha>]
-                                                   새 clone 재검증: 그 커밋(기본 HEAD)의 추적 파일만으로(.vibe/ 안 씀)
-                                                   MR 사본·리뷰 원문(전 회차 지적 장부)·QA 기록·QA 뒤 코드 변경을 PASS/FAIL로.
-                                                   QA tree 객체가 없으면(amend 전 tree) 커밋에서 재구성해 비교. 실패면 1
+  python handoff.py verify-evidence [G-###] [--commit <sha>] [--run-tests]
+                                                   새 clone 재검증 = 재연: 그 커밋(기본 HEAD)의 커밋된 증거만으로 임시 clone에
+                                                   .vibe/를 되살려 로컬과 같은 `mr_check --stage merge`를 돌린다(차이는
+                                                   REPLAY_DIFF 표뿐). --run-tests: 커밋된 코드에서 test_cmd를 다시 돌려 기록과
+                                                   대조(커밋의 명령을 실행 — 믿는 코드만, 환경변수는 허용 목록만).
+                                                   0 통과(--run-tests 일치), 4 UNPROVEN(재실행 안 함), 1 실패,
+                                                   3 LEGACY(증거 판 < EVIDENCE_SCHEMA — 재검증 대상)
   원격이 없거나 .vibe-flow.json "remote": false면 로컬 모드 — claim은 로컬 커밋만 한다
 
 인덱스 구조(docs/structure.md 「인덱스 계층」 — 대형 프로젝트):
@@ -439,7 +442,8 @@ def export_evidence(cfg, g):
     if not parts:
         die(f"[export-evidence] .vibe/review/에 이 MR({goals})·지금 브랜치·기준의 d*·r*.txt 기록 없음 — review.py로 받은 원문이 있어야 한다"
             + "".join(f"\n  제외: {x}" for x in skipped))
-    red_src = latest_red(vf_git.current_branch())
+    # merge가 고른 RED를 그대로 내보낸다(mr_check.select_red — 재연이 로컬과 같은 RED를 본다, A9-06)
+    red_src = mr_check.select_red(mr_check.sections(vf_git.normalize_mr(mr, cfg)).get("QA 결과", ""), goals.split(","), cfg)
     os.makedirs(f"{hdir}/mr", exist_ok=True)
     gl = goals.split(",")
     caps = []
@@ -450,6 +454,8 @@ def export_evidence(cfg, g):
         write(f"{hdir}/mr/{x}-qa.json", read(qa_src))
         if red_src:
             write(f"{hdir}/mr/{x}-red.json", read(red_src))
+        elif os.path.exists(f"{hdir}/mr/{x}-red.json"):   # 지금 merge가 고른 RED가 없으면 예전 사본도 지운다(A10-04)
+            os.remove(f"{hdir}/mr/{x}-red.json")
         write(f"{hdir}/mr/{x}-review.md", f"# {goals.replace(',', ' · ')} 리뷰 원문 (.vibe/review/ 사본, export-evidence)\n\n"
               + "\n".join(parts))
     print(f"[export-evidence] {' · '.join(gl)}: {hdir}/mr/<골>.md · -qa.json (← {qa_src}) · -review.md ({len(parts)}개 원문"
@@ -484,75 +490,187 @@ def parse_stamp(sec):
     return {k: v.strip() for k, v in re.findall(r"^(\w+):[ \t]*(.*)$", m.group(1), re.M)} if m else {}
 
 
-def latest_red(branch):
-    """.vibe/qa/red-*.json 중 branch가 같은 가장 최근(started) 기록 경로. 없으면 ''."""
-    best = ("", "")
-    d = qa_run.QA_DIR
-    for f in sorted(os.listdir(d)) if os.path.isdir(d) else []:
-        if not re.fullmatch(r"red-[0-9a-f]{7,40}\.json", f):
-            continue
+ROUND_HEAD = re.compile(r"^##\s+([dr])(\d+)\.txt\b[^\n]*\n", re.M)
+
+
+def evidence_rounds(review_md):
+    """G-###-review.md(export-evidence 사본)의 회차 [(종류 d|r, n, 도장 dict, 원문)] 순서대로."""
+    heads = list(ROUND_HEAD.finditer(review_md or ""))
+    out = []
+    for i, m in enumerate(heads):
+        sec = review_md[m.end():heads[i + 1].start() if i + 1 < len(heads) else len(review_md)]
+        body = re.search(r"^````text\n(.*?)\n````\s*$", sec, re.M | re.S)
+        out.append((m.group(1), int(m.group(2)), parse_stamp(sec), body.group(1) + "\n" if body else ""))
+    return out
+
+
+def evidence_schema(rounds, qa_rec, red_rec):
+    """커밋된 증거의 판(EVIDENCE_SCHEMA)이 지금 판보다 낮은 곳 [설명]. 비면 지금 판."""
+    want = vf_git.EVIDENCE_SCHEMA
+
+    def low(v):
         try:
-            rec = json.loads(read(os.path.join(d, f)))
-        except ValueError:
-            continue
-        if isinstance(rec, dict) and rec.get("branch") == branch and str(rec.get("started", "")) >= best[0]:
-            best = (str(rec.get("started", "")), os.path.join(d, f))
-    return best[1]
+            return int(v) < want
+        except (TypeError, ValueError):
+            return True
+    old = [f"{k}{n} 도장 schema {st.get('schema') or '없음'}" for k, n, st, _ in rounds if low(st.get("schema"))]
+    if isinstance(qa_rec, dict) and low(qa_rec.get("schema")):
+        old.append(f"QA 기록 schema {qa_rec.get('schema') or '없음'}")
+    if isinstance(red_rec, dict) and low(red_rec.get("schema")):
+        old.append(f"RED 기록 schema {red_rec.get('schema') or '없음'}")
+    return old
 
 
-def review_sections(review_md):
-    """G-###-review.md의 코드 리뷰 회차 [(n, 원문)] 순서대로 — '## rN.txt' 제목 단위만(dN 설계 확인은 코드 리뷰가 아니다)."""
-    secs = [s for s in re.split(r"^(?=##\s)", review_md, flags=re.M) if re.search(r"^VERDICT:", s, re.M)]
-    return list(enumerate([s for s in secs if re.match(r"##\s+r\d+\.txt\b", s)], 1))
+def base_commit(sha, base_tree):
+    """sha의 조상 중 tree가 base_tree인 가장 가까운 커밋(리뷰 도장 base = 그때 기준과의 merge-base tree). 없으면 ''."""
+    for line in vf_git.git("log", "--format=%H %T", sha).splitlines():
+        h, _, t = line.partition(" ")
+        if t == base_tree:
+            return h
+    return ""
 
 
-def reconstructed_qa_tree(sha, cfg, hdir):
-    """커밋 sha에서 QA 대상 tree를 다시 만든다: 첫 부모와 다른 경로 중 기록 파일(mr_check.is_record, <핸드오프>/mr/ 전부)을
-    부모 판으로 되돌린(부모에 없으면 뺀) tree. QA 뒤 기록만 amend했다면 qa_run이 잡은 tree와 같다 — 새 clone에는
-    amend 전 tree 객체가 없으므로(어느 커밋에서도 닿지 않음) 객체 대신 이것과 비교한다. (tree sha, 되돌린 기록, 남은 변경)."""
-    import mr_check
+# 재연이 로컬 merge와 다르게 보는 곳 — 이 표가 전부다(나머지는 mr_check.check(…, "merge")가 그대로 판정한다)
+REPLAY_DIFF = (
+    ("기준(base)", "설정의 base 브랜치 대신 판정 회차 도장 base(tree)를 가진 조상 커밋 — 머지 뒤 base가 앞서 가도 그때 기준으로"),
+    ("브랜치", "판정 회차 도장 branch 이름으로 재연 clone에서 체크아웃"),
+    ("골 상태", "active 또는 done — 기록 커밋은 골을 닫을 수 있다"),
+    ("tree 객체", "amend 전 QA·리뷰 tree는 clone되지 않는다 — 기록의 code_tree(기록 파일을 뺀 tree)로 같은 비교(changed_since)"),
+    ("캡처 링크", "사본의 <골>-evidence/ 상대 링크를 레포 루트 기준 <핸드오프>/mr/<골>-evidence/로"),
+)
+
+
+def replay(sha, gid, cfg, hdir, show, out, rerun=False):
+    """기록 커밋 sha의 증거로 임시 clone에 .vibe/를 되살리고 로컬과 같은 `mr_check.py --stage merge`를 돌린다.
+    out(ok, 줄)에 결과를 쌓는다. 증거 판이 낮으면 재연하지 않고 'LEGACY'를 돌려준다."""
+    import shutil
     import tempfile
-    parent = vf_git.git("rev-parse", "--verify", "-q", f"{sha}^1")
-    empty = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"   # 빈 tree(부모 없는 첫 커밋)
-    names = vf_git.git("diff", "--name-only", "--no-renames", parent or empty, sha, check=True).splitlines()
-    rec = [f for f in names if f and (f.startswith(hdir + "/mr/") or mr_check.is_record(f, cfg))]
-    rest = [f for f in names if f and f not in rec]
-    fd, idx = tempfile.mkstemp(prefix="vf-qa-index-")
-    os.close(fd)
-    os.remove(idx)
-    env = {"GIT_INDEX_FILE": idx}
-    try:
-        vf_git.git("read-tree", sha, env=env, check=True)
-        for f in rec:
-            ent = vf_git.git("ls-tree", parent, "--", f) if parent else ""
-            if ent:   # '<mode> blob <sha>\t<path>'
-                mode, _, rest_ = ent.partition(" ")
-                obj = rest_.split()[1]
-                vf_git.git("update-index", "--add", "--cacheinfo", f"{mode},{obj},{f}", env=env, check=True)
-            else:
-                vf_git.git("rm", "--cached", "-q", "--", f, env=env, check=True)
-        return vf_git.git("write-tree", env=env, check=True), rec, rest
-    finally:
-        if os.path.exists(idx):
-            os.remove(idx)
-
-
-def last_round(review_md):
-    """G-###-review.md의 마지막 VERDICT 줄이 든 코드 리뷰 회차('## rN.txt') 원문과 그 VERDICT. 없으면 ('', '')."""
-    secs = [s for s in re.split(r"^(?=##\s)", review_md, flags=re.M) if re.match(r"##\s+r\d+\.txt\b", s)]
-    for s in reversed(secs):
-        v = re.findall(r"^VERDICT:\s*(CONFIRM|CHANGES)", s, re.M)
-        if v:
-            return s, v[-1]
-    return "", ""
-
-
-def verify_evidence(g=None, commit=None):
-    """새 clone에서 재검증: 그 커밋(기본 HEAD)에 커밋된 파일만(git show) 본다 — .vibe/는 쓰지 않는다.
-    골마다 MR 사본(완료 조건 모두 [x], 「리뷰 기록」 판정 확정 — 사람 판정 D-nnn이면 커밋된 DECISIONS에 그 블록),
-    리뷰 원문(마지막 VERDICT CONFIRM, 그 회차에 blocker 없음, 전 회차 장부에 열린 blocker·major 없음 — 사람 판정이면 결정 블록이 다룸), QA 기록(exit 0, cmd = 커밋된 test_cmd, tree = MR QA 대상),
-    커밋 tree와 QA tree의 차이가 기록 파일뿐인지(QA tree 객체가 clone에 없으면 reconstructed_qa_tree로). PASS/FAIL 목록, 모두 통과면 0."""
+    mr_raw = show(f"{hdir}/mr/{gid}.md")
+    if not out(mr_raw is not None, f"{gid} MR 사본 {hdir}/mr/{gid}.md", "커밋에 없음"):
+        return ""
     import mr_check
+    goals = mr_check.mr_goal(vf_git.normalize_mr(mr_raw, cfg), cfg)
+    out(gid in goals.split(","), f"{gid}가 MR 사본 「골」에 있음", f"「골」: {goals or '골 ID 없음'} — {gid} 없음")
+    rv_raw = show(f"{hdir}/mr/{gid}-review.md")
+    rounds = evidence_rounds(rv_raw)
+    rr = [x for x in rounds if x[0] == "r"]
+    if not out(rr, f"{gid} 리뷰 원문 {hdir}/mr/{gid}-review.md의 코드 리뷰 회차(## rN.txt)",
+               "커밋에 없음" if rv_raw is None else "rN.txt 회차 없음 — 설계 확인(dN)은 코드 리뷰가 아니다"):
+        return ""
+
+    def js(p):
+        raw = show(p)
+        try:
+            return json.loads(raw) if raw else None
+        except ValueError:
+            return "bad"
+    qa_rec, red_rec = js(f"{hdir}/mr/{gid}-qa.json"), js(f"{hdir}/mr/{gid}-red.json")
+    if not out(isinstance(qa_rec, dict) and all(k in qa_rec for k in ("tree", "cmd", "exit")),
+               f"{gid} QA 기록 {hdir}/mr/{gid}-qa.json", "커밋에 없음" if qa_rec is None else "JSON tree·cmd·exit 아님"):
+        return ""
+    # 커밋된 값은 믿지 않는다 — tree는 파일 이름이 되므로 정확히 40자리 16진수만(A11-04: '../../x'로 바깥 파일 덮어쓰기)
+    bad_tree = [n for n, rc in (("QA", qa_rec), ("RED", red_rec)) if isinstance(rc, dict)
+                and not re.fullmatch(r"[0-9a-f]{40}", str(rc.get("tree", "")))]
+    if not out(not bad_tree, f"{gid} 증거 기록의 tree 값 형식(40자리 16진수)", f"{', '.join(bad_tree)} 기록의 tree가 sha가 아님"):
+        return ""
+    old = evidence_schema(rounds, qa_rec, red_rec if isinstance(red_rec, dict) else None)
+    if old:
+        return "LEGACY: " + "; ".join(old[:6])
+    stamp = rr[-1][2]
+    branch, base = stamp.get("branch", ""), base_commit(sha, stamp.get("base", ""))
+    if branch and (branch.startswith("-") or vf_git.git("check-ref-format", "--branch", branch) != branch):
+        branch = ""   # 도장 branch는 git 인자가 된다 — 옵션처럼 보이거나 브랜치 이름이 아니면 쓰지 않는다
+    if not out(branch and base, f"{gid} 판정 회차 도장의 브랜치·기준 커밋",
+               f"branch '{branch or '없음'}', base tree {stamp.get('base', '없음')[:12]}의 조상 커밋 없음"):
+        return ""
+    tmp = tempfile.mkdtemp(prefix="vf-replay-")
+    try:
+        src = vf_git.git("rev-parse", "--show-toplevel")
+        vf_git.git("clone", "-q", "--shared", "--no-checkout", src, tmp, check=True)
+
+        def g(*a):
+            return subprocess.run(["git", "-C", tmp, *a], capture_output=True, text=True, encoding="utf-8")
+        if not out(g("checkout", "-q", "-B", branch, sha).returncode == 0, f"{gid} 재연 clone 체크아웃 {branch}@{sha[:10]}",
+                   "체크아웃 실패"):
+            return ""
+        with open(os.path.join(tmp, ".git", "info", "exclude"), "a", encoding="utf-8") as f:
+            f.write("\n.vibe/\n")
+        vd = os.path.join(tmp, ".vibe")
+        # 커밋이 .vibe(또는 그 심볼릭 링크)를 담고 있으면 되살린 기록이 커밋 내용과 섞이거나 링크를 따라 바깥에 쓰인다(A11-04 잔여)
+        if not out(not os.path.lexists(vd), f"{gid} 커밋에 .vibe/ 없음(재연이 만드는 자리)",
+                   ".vibe가 커밋에 들어 있음(링크 포함) — .vibe/는 추적하지 않는다(.gitignore)"):
+            return ""
+        os.makedirs(vd)
+        if os.path.realpath(vd) != os.path.join(os.path.realpath(tmp), ".vibe"):
+            out(False, f"{gid} 재연 .vibe 경로", "임시 clone 밖을 가리킴")
+            return ""
+        for k, n, st, body in rounds:
+            os.makedirs(os.path.join(vd, "review"), exist_ok=True)
+            write(os.path.join(vd, "review", f"{k}{n}.txt"), body)
+            head = f"{st['tree']}\n" if k == "r" and st.get("tree") else ""
+            write(os.path.join(vd, "review", f"{k}{n}.{'tree' if k == 'r' else 'meta'}"),
+                  head + "".join(f"{x}: {v}\n" for x, v in st.items() if x != "tree"))
+        os.makedirs(os.path.join(vd, "qa"), exist_ok=True)
+        write(os.path.join(vd, "qa", f"{qa_rec['tree']}.json"), json.dumps(qa_rec, ensure_ascii=False))
+        if isinstance(red_rec, dict) and red_rec.get("tree"):
+            write(os.path.join(vd, "qa", f"red-{red_rec['tree']}.json"), json.dumps(red_rec, ensure_ascii=False))
+        mr_local = re.sub(r"(?<![\w/.-])(G-\d{3,}-evidence/)", lambda m: f"{hdir}/mr/{m.group(1)}", mr_raw)
+        mr_path = os.path.join(vd, f"mr-{gid}.md")
+        write(mr_path, mr_local)
+        env = {**os.environ, "VF_REPLAY": json.dumps({"base": base})}
+        here = os.path.dirname(os.path.abspath(__file__))
+        r = subprocess.run([sys.executable, os.path.join(here, "mr_check.py"), mr_path, "--stage", "merge"], cwd=tmp,
+                           env=env, capture_output=True, text=True, encoding="utf-8")
+        miss = [x.strip()[2:] for x in r.stdout.splitlines() if x.startswith(" - ")]
+        if r.returncode and not miss:
+            miss = [(r.stdout + r.stderr).strip()[-300:] or "mr_check 실패"]
+        out(r.returncode == 0 and not miss, f"{gid} 재연 merge 검사(로컬과 같은 mr_check --stage merge) 통과",
+            f"{len(miss)}건")
+        for x in miss:
+            out(False, f"{gid} merge", x)
+        if rerun and r.returncode == 0 and not miss:
+            # 실행 사실 재확인(A9-04): 기록의 tree·code_tree는 자기 신고다 — 커밋된 코드에서 test_cmd를 다시 돌려 대조.
+            # 커밋의 test_cmd를 그대로 실행하므로(A10-07) --run-tests로 명시했을 때만, merge 재연이 통과했을 때만,
+            # 비밀이 든 환경변수를 넘기지 않는다(RUN_ENV 허용 목록). OS 격리는 하지 않는다 — 믿지 않는 코드는 컨테이너에서.
+            q = subprocess.run([sys.executable, os.path.join(here, "qa_run.py")], cwd=tmp, env=run_env(env),
+                               capture_output=True, text=True, encoding="utf-8")
+            m = re.search(r"대상 tree: ([0-9a-f]{40})", q.stdout)
+            got = None
+            if m:
+                try:
+                    with open(os.path.join(tmp, ".vibe", "qa", f"{m.group(1)}.json"), encoding="utf-8") as fh:
+                        got = json.load(fh)
+                except (OSError, ValueError):
+                    got = None
+            same_tests = not isinstance(qa_rec.get("tests"), dict) or got is not None and got.get("tests") == qa_rec["tests"]
+            out(isinstance(got, dict) and qa_run.ok(got) and got.get("code_tree") == qa_rec.get("code_tree")
+                and (got.get("passed"), got.get("total")) == (qa_rec.get("passed"), qa_rec.get("total")) and same_tests,
+                f"{gid} 독립 재실행: 커밋된 코드에서 test_cmd 통과·수·테스트별 결과가 기록과 같음",
+                "재실행 기록 없음" if not got else
+                f"exit {got.get('exit')}, {got.get('passed')}/{got.get('total')} (기록 {qa_rec.get('passed')}/{qa_rec.get('total')})"
+                + ("" if got.get("code_tree") == qa_rec.get("code_tree") else ", 코드 tree 다름")
+                + ("" if same_tests else ", 테스트별 결과가 기록과 다름"))
+        return "\n".join(miss)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+RUN_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR", "HOME",
+           "USERPROFILE", "LANG", "LC_ALL", "PYTHONIOENCODING", "PYTHONUTF8", "VF_REPLAY")
+
+
+def run_env(env):
+    """--run-tests 재실행에 넘기는 환경변수 — 허용 목록만(토큰·키 등은 넘기지 않는다)."""
+    return {k: v for k, v in env.items() if k.upper() in RUN_ENV}
+
+
+def verify_evidence(g=None, commit=None, rerun=False):
+    """새 clone 재검증 = 재연(replay): 그 커밋(기본 HEAD)에 커밋된 증거(MR 사본·리뷰 원문과 회차 도장·QA·RED 기록)만으로
+    임시 clone에 .vibe/를 되살려 로컬과 **같은** merge 검사(mr_check.py --stage merge)를 돌린다 — 판정 규칙은 하나다.
+    로컬과 다르게 보는 곳은 REPLAY_DIFF 표뿐. 증거 판(schema)이 지금 판보다 낮으면 FAIL이 아니라 LEGACY(재검증 대상, 종료 3).
+    상태(UNVERIFIED·ACCEPTED-RISK·POLICY-PENDING)는 STATE 줄로도 낸다. 실행 사실(테스트가 정말 그렇게 돌았나)은
+    --run-tests(rerun)로 커밋된 코드에서 test_cmd를 다시 돌려야 확인된다 — 안 돌리면 통과가 아니라 UNPROVEN(종료 4).
+    종료: 통과 0, 실패 1, LEGACY 3, UNPROVEN 4(재연 merge는 통과, 실행 사실 미확인)."""
     commit = commit or "HEAD"
     sha = vf_git.git("rev-parse", "--verify", "-q", f"{commit}^{{commit}}")
     if not sha:
@@ -572,176 +690,44 @@ def verify_evidence(g=None, commit=None):
     gids = [g] if g else sorted(set(ID_RE.findall(vf_git.git("log", "-1", "--format=%s%n%b", sha))) - {"G-000"})
     if not gids:
         die("[verify-evidence] 골 ID 없음 — verify-evidence G-### 또는 커밋 메시지에 골 ID")
-    res = []
+    res, legacy = [], []
 
     def ok(cond, name, why=""):
         res.append((bool(cond), name if cond else f"{name} — {why}"))
         return cond
 
-    tree = vf_git.tree_of(sha)
-    plan = show(f"{hdir}/PLAN.md") or ""   # PLAN 링크 규칙도 커밋의 PLAN.md로(작업 트리 아님)
-    memo = {}
-
-    def code_of(t):
-        """t(tree)의 코드 tree(기록 파일을 뺀 tree, 커밋의 PLAN.md 기준). 읽을 수 없으면 ''."""
-        if t not in memo:
-            try:
-                memo[t] = qa_run.code_tree(t, cfg, plan=plan) if vf_git.obj_type(t) == "tree" else ""
-            except RuntimeError:
-                memo[t] = ""
-        return memo[t]
-
     for gid in gids:
-        p = f"{hdir}/mr/{gid}.md"
-        mr_raw = show(p)
-        if not ok(mr_raw is not None, f"{gid} MR 사본 {p}", "커밋에 없음"):
+        miss = replay(sha, gid, cfg, hdir, show, ok, rerun=rerun)
+        if miss.startswith("LEGACY: "):
+            legacy.append(f"{gid} 증거 판 < v{vf_git.EVIDENCE_SCHEMA} ({miss[8:]}) — 지금 규칙으로 판정 불가. 재검증 대상: "
+                          f"같은 코드에서 review.py·qa_run.py(--red --mr)를 다시 돌리고 export-evidence {gid}로 기록을 고친다")
             continue
-        mr = vf_git.normalize_mr(mr_raw, cfg)
-        goals = mr_check.mr_goal(mr, cfg)
-        ok(gid in goals.split(","), f"{gid}가 MR 사본 「골」에 있음", f"「골」: {goals or '골 ID 없음'} — {gid} 없음")
-        qa_sec = re.sub(r"<!--.*?-->", "", mr_check.sections(mr).get("QA 결과", ""), flags=re.S)
-        if re.search(rf"^\s*-\s*브라우저:\s*{qa_run.PASS}", qa_sec, re.M):   # 캡처는 사본 폴더 기준(또는 레포 루트 기준)
-            caps = [c for c in qa_run.evidence_paths(qa_sec) if qa_run.is_media(c)]
-            gone = [c for c in caps if not any(vf_git.obj_type(f"{sha}:{x}") == "blob" for x in
-                                               (posixpath.normpath(f"{hdir}/mr/{c}"), posixpath.normpath(c)))]
-            ok(caps and not gone, f"{gid} 캡처 증거 {len(caps)}개가 커밋에 있음 (브라우저: 통과)",
-               "캡처 증거 없음(새 clone): " + (", ".join(gone[:5]) if caps else "이미지·영상 링크 없음")
-               + f" — python handoff.py export-evidence {gid}로 {hdir}/mr/{gid}-evidence/에 넣어 같은 커밋에")
-        items = mr_check.completion_items(mr)
-        empty = [str(i) for i, (_, t) in enumerate(items, 1) if not t.strip()]
-        ok(items and all(c for c, _ in items) and not empty, f"{gid} 완료 조건 {len(items)}개 모두 [x]",
-           (f"빈 항목 {', '.join(empty)}번" if empty else f"미체크 {sum(1 for c, _ in items if not c)}개")
-           if items else "항목 없음")
-        stamp = None   # 판정 근거 회차(CONFIRM 회차 또는 사람 판정의 r3)의 도장
-        rv = mr_check.sections(mr).get("리뷰 기록", "")
-        human = re.search(r"판정:\s*확정\s*[(（]\s*사람 판정\s*(D-\d+)", rv)
-        ok(re.search(r"판정:\s*확정", rv), f"{gid} 「리뷰 기록」 판정: 확정", "없음")
-        if human:
-            did = human.group(1)
-            blocks = [show(f) for f in vf_git.git("ls-tree", "--name-only", sha, f"{hdir}/").splitlines()
-                      if re.fullmatch(rf"{re.escape(hdir)}/DECISIONS[^/]*\.md", f)]
-            hit = [m.group(0) for b in blocks if b for m in [re.search(rf"^##\s+{did}(?!\d).*?(?=^##\s|\Z)", b, re.M | re.S)] if m]
-            ok(hit and has_id(gid, hit[0]), f"{gid} 사람 판정 {did}가 커밋된 DECISIONS에 이 골 ID와 함께 있음",
-               "블록에 골 ID 없음" if hit else f"{hdir}/DECISIONS*.md에 '## {did}' 없음")
-        q = f"{hdir}/mr/{gid}-review.md"
-        rtext = show(q)
-        secs = review_sections(rtext) if rtext is not None else []
-        if ok(rtext is not None, f"{gid} 리뷰 원문 {q}", "커밋에 없음") and \
-                ok(secs, f"{gid} 리뷰 원문에 코드 리뷰 회차(## rN.txt)", "rN.txt 회차 없음 — 설계 확인(dN)은 코드 리뷰가 아니다"):
-            sec, v = last_round(rtext)
-            # 지적 장부: 전 회차를 차례로 — blocker·major는 FINDING으로 열고 RESOLVED(major는 CARRY도)로 닫는다(mr_check.ledger)
-            left = mr_check.ledger(secs, sevs=("blocker", "major"))
-            shown = ", ".join(f"{i}({s} r{n})" for i, (s, n) in sorted(left.items()))
-            if human:   # 사람이 판정했으면 Codex 원문은 기록으로만(마지막이 CHANGES일 수 있다) — 열린 지적은 결정 블록이 다룬다
-                did = human.group(1)
-                last_n = re.match(r"##\s+r(\d+)", secs[-1][1]).group(1)
-                nums = [re.match(r"##\s+r(\d+)", s_).group(1) for _, s_ in secs]
-                ok(nums == ["1", "2", "3"], f"{gid} 사람 판정 {did}은 r1·r2·r3 연속 회차 뒤",
-                   f"코드 리뷰 회차 {', '.join('r' + n for n in nums) or '없음'} — VERDICT 있는 r1·r2·r3가 모두 있어야 한다")
-                ok(v and last_n == "3" and secs[-1][1] == sec, f"{gid} 사람 판정 {did}은 유효한 r3 뒤",
-                   f"마지막 코드 리뷰 회차 r{last_n}{'' if v else '(VERDICT 없음)'} — 사람 판정은 3라운드 뒤에만(r3 필요)")
-                blk = hit[0] if hit else ""
-                lack = sorted(i for i in left if not mr_check.has_fid(i, blk))
-                ok(not lack, f"{gid} 열린 지적을 사람 판정 {did} 블록이 모두 다룸",
-                   f"블록에 없는 열린 지적 {', '.join(lack)}")
-                cover = mr_check.decision_cover(did, rv, left, cfg, "리뷰 기록", blk=blk)
-                ok(not cover, f"{gid} 「리뷰 기록」 '- 사람 결정: {did} — <ID들>'이 열린 지적을 모두 적음", "; ".join(cover))
-                stamp = parse_stamp(sec)
-                tm = re.search(rf"^\s*-\s*사람 결정:\s*{did}(?!\d).*?\(\s*tree\s+([0-9a-f]{{7,40}})\s*\)", rv, re.M)
-                ok(tm and stamp.get("tree", "").startswith(tm.group(1)), f"{gid} 사람 결정 {did}의 tree = r3 리뷰 tree",
-                   "결정 줄에 (tree <sha>) 없음" if not tm else
-                   f"결정 tree {tm.group(1)[:10]} ≠ r3 tree {stamp.get('tree', '없음')[:10]}")
-            elif ok(v == "CONFIRM", f"{gid} 리뷰 원문 마지막 VERDICT: CONFIRM", f"마지막 VERDICT: {v or '없음'}"):
-                bl = [x for x in mr_check.findings(sec) if x["sev"].lower() == "blocker"]
-                ok(not bl, f"{gid} 마지막 회차에 blocker FINDING 없음", ", ".join(x["id"] for x in bl))
-                ok(not left, f"{gid} 전 회차 지적 장부에 열린 blocker·major 없음",
-                   f"열린 지적 {shown} — 뒤 회차 RESOLVED(major는 CARRY)에 없음")
-                stamp = parse_stamp(sec)
-            if stamp is not None and ok(stamp.get("tree") and stamp.get("conds") and stamp.get("contract"),
-                                        f"{gid} 판정 회차 도장(tree·conds·contract)", "도장 없음 — export-evidence로 다시"):
-                sg = [x for x in re.split(r"[,\s]+", stamp.get("goal", "")) if x]   # branch·base는 새 clone에서 대조 불가
-                ok(gid in sg, f"{gid} 판정 회차 도장 goal에 {gid}",
-                   f"도장 goal: {', '.join(sg) or '없음'} — 다른 골의 리뷰 회차(review.py로 이 MR을 다시 리뷰)")
-                ok(stamp["conds"] == mr_check.completion_hash(mr_raw), f"{gid} 리뷰 뒤 완료 조건 그대로(conds)",
-                   "리뷰 뒤 완료 조건이 바뀜 — 리뷰 재실행(review.py --round 1)")
-                ok(stamp["contract"] == mr_check.contract_hash(mr_raw, cfg), f"{gid} 리뷰 뒤 계약 그대로(contract)",
-                   f"리뷰 뒤 계약(「{'」「'.join(mr_check.REVIEW_CONTRACT)}」)이 바뀜 — 리뷰 재실행")
-            else:
-                stamp = None
-        q = f"{hdir}/mr/{gid}-qa.json"
-        raw = show(q)
-        if not ok(raw is not None, f"{gid} QA 기록 {q}", "커밋에 없음"):
-            continue
-        try:
-            rec = json.loads(raw)
-        except ValueError:
-            rec = None
-        if not ok(isinstance(rec, dict) and all(k in rec for k in ("tree", "cmd", "exit")), f"{gid} QA 기록 형식",
-                  "JSON tree·cmd·exit 아님"):
-            continue
-        ok(rec["exit"] == 0, f"{gid} QA exit 0", f"exit {rec['exit']}")
-        ok(qa_ok(rec), f"{gid} QA 통과(전부 건너뜀 아님·ok)",
-           f"passed {rec.get('passed', '?')}/{rec.get('total', '?')}, ok {rec.get('ok', '없음')} — 통과한 실행이 아님")
-        want = (cfg.get("test_cmd") or "").strip()
-        ok(want and rec["cmd"] == want, f"{gid} QA cmd = 커밋된 test_cmd",
-           f"기록 '{str(rec['cmd'])[:60]}' ≠ test_cmd '{want[:60] or '없음'}'")
-        tgt = qa_target(mr)
-        ttree = vf_git.tree_of(tgt) if tgt else ""
-        rt = str(rec["tree"])
-        cur = code_of(tree)
-        if stamp:   # 리뷰가 본 tree의 코드 = QA 코드(= 커밋 코드, 아래에서 대조) — 리뷰 뒤 코드 변경은 증거가 아니다
-            st_t = stamp["tree"]
-            seen = st_t == rt or (stamp.get("code_tree") or code_of(st_t)) in (rec.get("code_tree") or "\0", cur or "\0")
-            try:
-                why = ", ".join(mr_check.code_diff(st_t, tree, cfg)[0][:5]) if not seen and vf_git.obj_type(st_t) == "tree" else ""
-            except RuntimeError:
-                why = ""
-            ok(seen, f"{gid} 리뷰가 본 tree의 코드 = QA 코드",
-               f"리뷰 tree {st_t[:12]} 뒤 바뀐 코드: {why or '(이 clone에 리뷰 tree 없음 — 대조 불가)'}")
-        if "code_tree" in rec:   # 기록 파일을 뺀 코드 tree — QA 전·후 기록 변경과 무관하게 커밋에서 다시 만든다
-            ok(tgt and (rt.startswith(tgt) or rt == ttree), f"{gid} QA tree = MR 「QA 결과」 대상",
-               "MR에 대상 없음" if not tgt else f"기록 {rt[:12]} · 대상 {tgt[:12]}")
-            ok(cur and cur == rec["code_tree"], f"{gid} 커밋 코드 tree = QA 코드 tree (기록 파일을 뺀 tree, 재구성 일치)",
-               f"커밋 {cur[:12] or '계산 실패'} ≠ QA {str(rec['code_tree'])[:12]} — QA 뒤 코드가 바뀜")
-            continue
-        if tgt and not ttree and re.fullmatch(r"[0-9a-f]{40}", rt) and rt.startswith(tgt):
-            # 이 clone에 QA tree 객체가 없다(amend 전 tree는 어느 커밋에서도 닿지 않아 clone되지 않음) — 커밋에서 재구성
-            try:
-                rebuilt, back, rest = reconstructed_qa_tree(sha, cfg, hdir)
-            except RuntimeError as e:
-                ok(False, f"{gid} QA 대상 tree 재구성", str(e)[:120])
-                continue
-            ok(rebuilt == rt, f"{gid} QA 대상 tree 재구성 일치 (커밋에서 기록 {len(back)}개를 부모 판으로)",
-               f"재구성 {rebuilt[:12]} ≠ 기록 {rt[:12]} — QA 뒤 바뀌었을 수 있는 코드: "
-               + (", ".join(rest[:5]) + (" …" if len(rest) > 5 else "") if rest else "(없음 — 기록 파일만 다름)"))
-            continue
-        if not ok(ttree and rt == ttree, f"{gid} QA tree = MR 「QA 결과」 대상",
-                  "MR에 대상 없음" if not tgt else f"기록 {rt[:12]} · 대상 {tgt[:12]}{'' if ttree else '(이 clone에 없음)'}"):
-            continue
-        try:
-            code, _ = mr_check.code_diff(ttree, tree, cfg)
-        except RuntimeError as e:
-            code = [f"비교 실패: {e}"]
-        ok(not code, f"{gid} 커밋 tree와 QA tree 차이가 기록 파일뿐",
-           "QA 뒤 바뀐 코드: " + ", ".join(code[:5]) + (" …" if len(code) > 5 else ""))
+        for st in mr_check_states(miss):
+            print(f"STATE {gid} {st}")
     for good, line in res:
         print(f"{'PASS' if good else 'FAIL'} {line}")
-    for gid in gids:   # RED 증거는 참고(INFO) — 판정에 넣지 않는다
-        q = f"{hdir}/mr/{gid}-red.json"
-        raw = show(q)
-        try:
-            rr = json.loads(raw) if raw else None
-        except ValueError:
-            rr = None
-        if not isinstance(rr, dict):
-            print(f"INFO {gid} RED 기록 {q} " + ("형식이 아님" if raw else "없음 (qa_run.py --red — 필수 아님)"))
-            continue
-        bad_t = [k for k, v in (rr.get("tests") or {}).items() if v == "fail"]
-        print(f"INFO {gid} RED 기록 {q} — {str(rr.get('tree'))[:12]} exit {rr.get('exit')}"
-              + (f", {len(bad_t)}개 실패({', '.join(bad_t[:5])})" if bad_t else ""))
+    for line in legacy:
+        print(f"LEGACY {line}")
     bad = sum(1 for good, _ in res if not good)
-    print(f"[verify-evidence] {vf_git.git('rev-parse', '--short', sha)} " + (f"FAIL {bad}건" if bad else "통과 — 커밋된 증거만으로 확인"))
-    sys.exit(1 if bad else 0)
+    short = vf_git.git("rev-parse", "--short", sha)
+    if bad:
+        print(f"[verify-evidence] {short} FAIL {bad}건" + (f" · LEGACY {len(legacy)}건" if legacy else ""))
+        sys.exit(1)
+    if legacy:
+        print(f"[verify-evidence] {short} LEGACY {len(legacy)}건 — 옛 판 증거, 재검증 대상(통과 아님)")
+        sys.exit(3)
+    if not rerun:   # A10-03: 기록 대조만으로는 테스트가 그렇게 돌았다는 증명이 아니다
+        print(f"[verify-evidence] {short} UNPROVEN — 재연 merge 검사는 통과, 실행 사실은 미확인(통과 아님). "
+              "커밋의 test_cmd를 믿을 수 있으면 --run-tests로 다시 돌려 확인한다(믿지 않는 코드는 격리된 환경에서)")
+        sys.exit(4)
+    print(f"[verify-evidence] {short} 통과 — 커밋된 증거만으로 로컬과 같은 merge 검사 + 테스트 재실행 일치")
+    sys.exit(0)
+
+
+def mr_check_states(miss):
+    """재연 merge 결과 줄 중 상태(UNVERIFIED·ACCEPTED-RISK·POLICY-PENDING)로 시작하는 줄."""
+    import mr_check
+    return [x for x in (miss or "").splitlines() if x.split(" ", 1)[0] in mr_check.STATES]
 
 
 def check_record(cfg, commit=None):
@@ -829,13 +815,14 @@ if __name__ == "__main__":
         check_record(cfg, a[2] if len(a) > 2 and a[1] == "--commit" else None)
     elif a[:1] == ["export-evidence"] and len(a) == 2:
         export_evidence(cfg, a[1])
-    elif a[:1] == ["verify-evidence"] and len(a) <= 4:
-        rest = a[1:]
+    elif a[:1] == ["verify-evidence"] and len(a) <= 5:
+        rerun = "--run-tests" in a   # 커밋의 test_cmd 재실행은 명시적으로만(A10-07). 없으면 UNPROVEN(종료 4, A10-03)
+        rest = [x for x in a[1:] if x != "--run-tests"]
         at = rest[rest.index("--commit") + 1] if "--commit" in rest[:-1] else None
         gs = [x for x in rest if x != "--commit" and x != at]
         if len(gs) > 1 or (gs and not re.fullmatch(r"G-\d{3,}", gs[0])) or ("--commit" in rest and not at):
             die(__doc__)
-        verify_evidence(gs[0] if gs else None, at)
+        verify_evidence(gs[0] if gs else None, at, rerun=rerun)
     elif a[:1] == ["migrate"]:
         snap, made = hindex.migrate(cfg)
         print(f"[migrate] 완료 — 스냅숏 {snap}\n  " + "\n  ".join(made))

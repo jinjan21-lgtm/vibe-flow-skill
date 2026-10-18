@@ -11,7 +11,7 @@
 라운드 1: 기준 대비 지금 작업물 전체 diff
 라운드 2: 라운드 1 시점 스냅샷 대비 diff + 라운드 1 지적
 라운드 3: 라운드 2 시점 스냅샷 대비 diff 중 --files만 + 열린 지적
-결과: .vibe/review/r<N>.txt (Codex 원문), r<N>.tree (그 시점 스냅샷 + goal·branch·base·conds·contract), d<N>.meta (골·브랜치·기준
+결과: .vibe/review/r<N>.txt (Codex 원문), r<N>.tree (그 시점 스냅샷 + schema·goal·branch·base·code_tree·conds·contract), d<N>.meta (골·브랜치·기준
 tree·설계 확인 때 코드가 이미 바뀌었는지·design: 「설계」 해시). 다른 골·브랜치·기준의 기록은 다음 회차의 근거가 아니다(mr_check도 같다).
 VERDICT: CONFIRM인데 blocker FINDING이 있는 응답은 모순이라 무효(.failed).
 지적 장부: 라운드 N>1의 CONFIRM은 앞 라운드에서 열린 blocker·major ID를 모두 RESOLVED에 적어야 유효하다
@@ -139,9 +139,11 @@ def numbered(conds):
     return "".join(f"{i}. {c}\n" for i, c in enumerate(conds, 1))
 
 
-def checked_problems(text, conds):
+def checked_problems(text, conds, need_test=False):
     """CHECKED 줄 검사: 'CHECKED: <번호> — <근거>' 형식, 1..N이 정확히 한 번씩(중복·범위 밖·누락·번호 없음은 무효).
-    줄 수만 세면 아무 말 두 줄로 두 조건을 채울 수 있다(근거 없는 확정)."""
+    줄 수만 세면 아무 말 두 줄로 두 조건을 채울 수 있다(근거 없는 확정). 근거는 레포에 실재하는 테스트 이름이나
+    '파일:줄'이어야 한다(mr_check.checked_ref_problems) — need_test(표준·강화)면 조건마다 테스트 이름이 하나 이상."""
+    import mr_check
     bad, seen = [], {}
     for line in re.findall(r"^CHECKED:[ \t]*(.*)$", text, re.M):
         m = re.match(r"(\d+)\s*[—–-]+\s*(\S.*)$", line.strip())
@@ -153,9 +155,21 @@ def checked_problems(text, conds):
             bad.append(f"범위 밖 번호 {k} (완료 조건 1~{len(conds)})")
         elif k in seen:
             bad.append(f"번호 {k} 중복")
+        else:
+            bad += [f"{k}번 {p}" for p in mr_check.checked_ref_problems(m.group(2), need_test)]
+            bad += [f"{k}번 {p}" for p in mr_check.unmet_problems(m.group(2), text)]
         seen[k] = True
     bad += [f"{i}. {c} — CHECKED 줄 없음" for i, c in enumerate(conds, 1) if i not in seen]
     return bad
+
+
+def code_tree_line(tree):
+    """'code_tree: <기록 파일을 뺀 tree>' 줄 — 새 clone(리뷰 tree 객체가 없음)에서도 리뷰가 본 코드를 대조한다."""
+    import qa_run
+    try:
+        return f"code_tree: {qa_run.code_tree(tree, vf_git.config())}\n"
+    except RuntimeError:
+        return ""
 
 
 def findings(text):
@@ -328,15 +342,23 @@ def main():
             invalidate(out)
             sys.exit(f"[review] VERDICT: CONFIRM인데 앞 라운드의 열린 지적이 닫히지 않음 — 무효, 판정을 적지 않습니다 "
                      f"({out}.failed).\n" + "\n".join(f" - {c}" for c in bad) + f"\n→ 같은 라운드 {n}을 다시 돌립니다.")
+    if n > 1:   # 2·3라운드의 CHECKED(r1 '미충족'을 닫으며 다는 새 근거)도 같은 근거 규칙(A10-02)
+        need = mr_check.profile(mr_check.sections(mr)) != "경량"
+        bad = [f"{k}번 {p}" for k, ev in mr_check.CHECKED_LINE.findall(text)
+               for p in mr_check.checked_ref_problems(ev, need) + mr_check.unmet_problems(ev, text)]
+        if bad:
+            invalidate(out)
+            sys.exit(f"[review] 라운드 {n} CHECKED 근거가 무효 — 판정을 적지 않습니다 ({out}.failed).\n"
+                     + "\n".join(f" - {c}" for c in bad) + f"\n→ 같은 라운드 {n}을 다시 돌립니다.")
     if n == 1:
-        bad = checked_problems(text, conds)
+        bad = checked_problems(text, conds, need_test=mr_check.profile(mr_check.sections(mr)) != "경량")
         if bad:
             invalidate(out)
             sys.exit(f"[review] Codex 응답의 CHECKED 근거가 완료 조건 1~{len(conds)}번과 한 번씩 맞지 않습니다 — 무효, "
                      f"판정을 적지 않습니다 ({out}.failed).\n" + "\n".join(f" - {c}" for c in bad)
                      + "\n→ 같은 라운드 1을 다시 돌립니다.")
     with open(os.path.join(D, f"r{n}.tree"), "w", encoding="utf-8") as f:
-        f.write(f"{cur}\n" + mr_check.record_stamp(goal, vf_git.config())
+        f.write(f"{cur}\n" + mr_check.record_stamp(goal, vf_git.config()) + code_tree_line(cur)
                 + f"conds: {mr_check.completion_hash(mr)}\ncontract: {mr_check.contract_hash(mr)}\n")   # 리뷰 뒤 완료 조건이 바뀌면 qa·merge가 막는다
     fs = findings(text)
     checked = len(re.findall(r"^CHECKED:\s*\S", text, re.M))

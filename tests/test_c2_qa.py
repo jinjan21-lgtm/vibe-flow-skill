@@ -15,9 +15,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_scripts import PY, SCRIPTS, sh  # noqa: E402
 from test_c2_record import MR_FILE, PersonalRepo, init_repo, write  # noqa: E402
 
-PASS_CMD = f'"{PY}" -c "print(\'ok 3/3\')"'
+# 통과는 출력에서 읽은 수(passed ≥ 1)가 있어야 한다(A9-08) — 가짜 명령도 unittest 요약을 찍는다
+PASS_CMD = f'"{PY}" -c "print(\'Ran 3 tests in 0.0s\'); print(); print(\'OK\')"'
 FAIL_CMD = f'"{PY}" -c "import sys; print(\'boom\'); sys.exit(3)"'
-LONG_CMD = f'"{PY}" -c "[print(i) for i in range(300)]"'
+LONG_CMD = f'"{PY}" -c "print(\'Ran 1 test in 0.0s\'); print(); print(\'OK\'); [print(i) for i in range(300)]"'
+NOCOUNT_CMD = f'"{PY}" -c "print(1)"'
 
 
 class QaRepo(unittest.TestCase):
@@ -66,11 +68,22 @@ class RunAndRecordTest(QaRepo):
         self.assertEqual(rec["tree"], tree)
         self.assertEqual(rec["exit"], 0)
         self.assertEqual(rec["cmd"], PASS_CMD)
-        self.assertIn("ok 3/3", rec["tail"])
+        self.assertIn("Ran 3 tests", rec["tail"])
+        self.assertEqual((rec["schema"], rec["passed"], rec["total"], rec["ok"]), (2, 3, 3, True))
         for k in ("started", "seconds"):
             self.assertIn(k, rec)
         self.assertIn(f"- 대상 tree: {tree}", r.stdout)
-        self.assertRegex(r.stdout, rf"- 코드: 통과 — .* exit 0, [\d.]+s \(기록 \.vibe/qa/{tree}\.json\)")
+        self.assertRegex(r.stdout, rf"- 코드: 통과 — 3/3 통과, .* exit 0, [\d.]+s \(기록 \.vibe/qa/{tree}\.json\)")
+
+    def test_no_counts_is_not_pass(self):   # A9-08: exit 0이어도 수를 읽을 수 없는 출력은 통과가 아니다
+        self.cfg(NOCOUNT_CMD)
+        r = self.qa()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        rec = json.load(open(os.path.join(self.d, ".vibe", "qa", f"{self.tree()}.json"), encoding="utf-8"))
+        self.assertEqual((rec["exit"], rec["ok"]), (0, False))
+        self.assertNotIn("passed", rec)
+        self.assertIn("- 코드: 실패(테스트 수를 읽을 수 없음", r.stdout)
+        self.assertNotRegex(r.stdout, r"- 코드: 통과")
 
     def test_fail_records_exit_and_mirrors_it(self):
         self.cfg(FAIL_CMD)
@@ -196,7 +209,8 @@ class CheckRecordQaJsonTest(PersonalRepo):
     def add_qa(self, exit_code):
         mr = open(os.path.join(self.d, "docs/mr/G-001.md"), encoding="utf-8").read()
         tree = re.search(r"대상 tree: ([0-9a-f]{40})", mr).group(1)   # work_and_record가 「QA 결과」에 쓴 tree
-        write(self.d, "docs/mr/G-001-qa.json", json.dumps({"tree": tree, "cmd": "t", "exit": exit_code}))
+        write(self.d, "docs/mr/G-001-qa.json", json.dumps({"schema": 2, "tree": tree, "cmd": "t", "exit": exit_code,
+                                                           "passed": 3 if exit_code == 0 else 2, "total": 3}))
         write(self.d, "docs/mr/G-001-review.md", "VERDICT: CONFIRM\n")
         sh("git", "add", "-A", cwd=self.d)
         sh("git", "commit", "-q", "--amend", "--no-edit", cwd=self.d)
@@ -271,7 +285,8 @@ class CheckRecordStrictTest(PersonalRepo):
 
     def test_qa_json_other_tree_is_problem(self):
         self.work_and_record(mr=MR_FILE)
-        r = self.amend("docs/mr/G-001-qa.json", json.dumps({"tree": "b" * 40, "cmd": "t", "exit": 0}))
+        r = self.amend("docs/mr/G-001-qa.json", json.dumps({"schema": 2, "tree": "b" * 40, "cmd": "t", "exit": 0,
+                                                             "passed": 3, "total": 3}))
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("대상", r.stdout)
 

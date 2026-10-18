@@ -25,7 +25,9 @@
   merge  : + 「완료 조건」 항목이 모두 '- [x]'(체크박스 없는 항목도 미체크).
            「QA 결과」의 대상(commit 또는 tree)이 지금 작업물(미커밋 포함)과 같고 코드 통과.
            UI 파일이 바뀌었으면 브라우저 통과 + 캡처. 노스스타가 기준 이후 바뀌었으면 골 재판정 필요.
-           base가 앞서 갔으면 리베이스 후 QA
+           base가 앞서 갔으면 리베이스 후 QA. 상태 셋(STATES — UNVERIFIED·ACCEPTED-RISK·POLICY-PENDING)은 모두 차단.
+           리뷰 라운드 1 CHECKED 근거 테스트가 QA 기록 tests에서 모두 ok. 표준·강화는 이 골·기준의 RED 기록.
+           handoff.py verify-evidence는 이 검사를 커밋된 증거로 재연한다(같은 함수 — 차이는 handoff.REPLAY_DIFF)
   강도 프로필(profile): 강화(위험·데이터·API 줄에 금액·결제·권한·인증·개인정보·삭제·마이그레이션·외부 API 계약)면
            draft부터 「검증 계획」 '- 코드:'에 회귀 테스트, merge에서 「QA 결과」 '- 회귀:'(QA 기록 tests에 모두 ok). 위험 값은 정확히 '없음'만 없음
   --next DONE은 HEAD의 <핸드오프>/mr/G-###.md 「골」「완료 조건」「제외 범위」가 작업 MR과 같아야 한다
@@ -261,7 +263,7 @@ def current_base(cfg):
 
 def record_stamp(goal, cfg):
     """.vibe/review 기록(r<N>.tree·d<N>.meta)에 남기는 맥락: 골·브랜치·기준 tree(base와의 merge-base)."""
-    return f"goal: {goal}\nbranch: {vf_git.current_branch()}\nbase: {current_base(cfg)}\n"
+    return f"schema: {vf_git.EVIDENCE_SCHEMA}\ngoal: {goal}\nbranch: {vf_git.current_branch()}\nbase: {current_base(cfg)}\n"
 
 
 def record_problem(path, goal, cfg):
@@ -420,6 +422,20 @@ def code_diff(old, cur, cfg):
     return [f for f in code if f not in ignored], ignored
 
 
+def changed_since(seen, cfg, seen_code=""):
+    """기록이 본 tree(seen) 뒤 지금 작업물에서 바뀐 코드 파일. 판정 엔진의 유일한 「그 뒤 코드가 바뀌었나」 비교 —
+    로컬 merge와 verify-evidence 재연(replay)이 같이 쓴다. seen tree 객체가 없으면(새 clone — amend 전 tree는 clone되지
+    않는다) 기록에 남은 code_tree(기록 파일을 뺀 tree)를 지금 코드 tree와 비교한다. 둘 다 없으면 RuntimeError."""
+    cur = vf_git.snapshot()
+    if re.fullmatch(r"[0-9a-f]{7,40}", seen or "") and vf_git.obj_type(seen) == "tree":
+        return code_diff(seen, cur, cfg)[0]
+    if seen_code:
+        import qa_run
+        now = qa_run.code_tree(cur, cfg)
+        return [] if now == seen_code else [f"(코드 tree {now[:10]} ≠ 기록 {seen_code[:10]})"]
+    raise RuntimeError(f"tree {str(seen)[:12]} 없음")
+
+
 def diverged_design_checks(goal, cfg=None):
     """이 골의 설계 확인 중 코드가 이미 기준과 달랐던 회차(review.py가 .vibe/review/d<N>.meta에 남긴다).
     지금 맥락(골·브랜치·기준)이 아닌 meta는 이전 작업의 것이라 보지 않는다."""
@@ -498,7 +514,9 @@ def goal_checks(s, cfg):
             miss.append(f"{gid} 골 파일 없음 ({gdir})")
         else:
             with open(os.path.join(gdir, hit[0]), encoding="utf-8") as f:
-                if not re.search(r"^status:\s*active", f.read(), re.M):
+                # 재연(verify-evidence — REPLAY_DIFF): 기록 커밋은 골을 done으로 닫는다 — 그 커밋에서는 done도 그 골이다
+                ok_st = r"active|done" if cfg.get("_replay") else r"active"
+                if not re.search(rf"^status:\s*(?:{ok_st})\b", f.read(), re.M):
                     miss.append(f"{gid} 상태가 active 아님")
     return miss, gids
 
@@ -558,8 +576,8 @@ def check(text, stage, cfg):
             if not drounds:   # 사람 판정은 Codex 설계 확인 2회 뒤에만 — 확인 없이 결정 문서만 쓰는 우회를 막는다
                 miss.append(f"「설계 확인」 사람 판정 {human.group(1)}: 설계 확인 기록(d1·d2) 없음 — 사람 판정은 설계 확인 2회 뒤에만")
             else:   # 2회를 다 쓴 뒤에만, 남은 blocker를 결정이 모두 적어야 한다
-                if drounds[-1][0] != 2:
-                    miss.append(f"「설계 확인」 사람 판정 {human.group(1)}: 2회차 유효 기록(d2) 없음 — 사람 판정은 설계 확인 2회 뒤에만")
+                if [n for n, _ in drounds] != [1, 2]:   # d2 하나만 남긴 것은 2회를 다 쓴 것이 아니다
+                    miss.append(f"「설계 확인」 사람 판정 {human.group(1)}: 유효 기록 d1·d2가 모두 있어야 함 — 사람 판정은 설계 확인 2회 뒤에만")
                 else:
                     miss += decision_cover(human.group(1), dc, {x["id"]: ("blocker", 2) for x in blockers(drounds[-1][1])},
                                            cfg, "설계 확인")
@@ -614,9 +632,11 @@ def check(text, stage, cfg):
         if n:
             miss.append(f"완료 조건 미체크 {n}개 — 「완료 조건」 항목은 모두 '- [x]'여야 함('- [ ]'·체크박스 없는 항목)")
         miss += merge_checks(s.get("QA 결과", ""), cfg)
-        miss += unverified_problems(s.get("QA 결과", ""), gids, cfg)
+        miss += unverified_problems(s.get("QA 결과", ""), gids, cfg, s=s)
+        miss += checked_run_problems(goal, cfg, s.get("QA 결과", ""), text)
         if profile(s) != "경량":
-            miss += red_evidence(s.get("QA 결과", ""))
+            miss += red_evidence(s.get("QA 결과", ""), gids, cfg)
+        miss += schema_problems(goal, cfg, s.get("QA 결과", ""))
         if profile(s) == "강화":
             ids = test_ids(line_value(s.get("QA 결과", ""), "회귀"))
             if not ids:
@@ -634,9 +654,36 @@ TEST_ID = re.compile(r"(?<![\w./\\-])(?:[\w./\\-]+\.py::\w+(?:::\w+)*|(?:[\w.-]+
                      r"|(?:[A-Za-z_]\w*\.)*test_\w+)(?![\w./\\-])")
 
 
+# JS 테스트 식별자(A11-01·12차): qa_run.parse_tests와 같은 모양 — jest '파일 › 묶음 › 이름', vitest '파일 > 묶음 > 이름'.
+# JS 테스트 이름에는 공백·쉼표·괄호가 들어갈 수 있다 — 중간에서 자르지 않는다(A13-02): 식별자는 파일부터 그 칸(';'·줄 끝으로
+# 나눈 칸) 끝까지, 끝의 '(파일:줄)' 하나만 뗀다. 한 칸에 JS 식별자는 하나(여럿이면 ';'로 나눈다)
+JS_TEST_START = re.compile(r"(?<![\w./\\-])[\w./\\-]+\.(?:test|spec)\.[cm]?[jt]sx?\s*[›>]")
+JS_TRAIL_REF = re.compile(r"\s*\(\s*[\w./\\-]+\.[A-Za-z0-9]+:\d+(?:-\d+)?\s*\)\s*$")
+JS_TEST_FILE = re.compile(r"\.(?:test|spec)\.[cm]?[jt]sx?$")
+
+
+def js_parts(tid):
+    """JS 식별자 → (파일, [묶음…, 이름]). JS 식별자가 아니면 None."""
+    if not JS_TEST_FILE.search(re.split(r"\s*[›>]\s*", tid)[0]):
+        return None
+    parts = [x.strip() for x in re.split(r"\s*[›>]\s*", tid) if x.strip()]
+    return (parts[0], parts[1:]) if len(parts) > 1 else None
+
+
 def test_ids(value):
-    """'- 코드:'·'- 회귀:' 값의 테스트 식별자(test_x · Class.test_x · path/test_x.py::name · tests/…py)."""
-    return TEST_ID.findall(value or "")
+    """'- 코드:'·'- 회귀:'·CHECKED 값의 테스트 식별자(test_x · Class.test_x · path/test_x.py::name · tests/…py ·
+    JS '파일 › 묶음 › 이름'·'파일 > 묶음 > 이름')."""
+    js, rest = [], []
+    for seg in re.split(r"[;\n]", value or ""):
+        m = JS_TEST_START.search(seg)
+        if not m:
+            rest.append(seg)
+            continue
+        tail = seg[m.start():]
+        ref = JS_TRAIL_REF.search(tail)
+        js.append((tail[:ref.start()] if ref else tail).strip())
+        rest.append(seg[:m.start()] + (ref.group(0) if ref else ""))
+    return js + TEST_ID.findall(" ; ".join(rest))
 
 
 def _test_files():
@@ -645,12 +692,21 @@ def _test_files():
         dirs[:] = [d for d in dirs if d not in skip]
         in_tests = re.search(r"(^|[/\\])tests?([/\\]|$)", root)
         for f in files:
-            if in_tests or f.startswith("test") or "_test" in f:
+            if in_tests or f.startswith("test") or "_test" in f or JS_TEST_FILE.search(f):
                 yield os.path.join(root, f)
 
 
 def test_exists(tid):
-    """식별자가 레포 테스트 파일에 있는가 — 경로면 그 파일이 있어야, 이름이면 마지막 성분이 테스트 파일에 나와야 한다."""
+    """식별자가 레포 테스트 파일에 있는가 — 경로면 그 파일이 있어야, 이름이면 마지막 성분이 테스트 파일에 나와야 한다.
+    JS 식별자는 그 파일이 있고 마지막 이름이 it('…')·test('…')로 정의돼 있어야."""
+    js = js_parts(tid)
+    if js:
+        f, names = js
+        if not os.path.isfile(f):
+            return False
+        with open(f, encoding="utf-8", errors="ignore") as fh:
+            body = fh.read()
+        return bool(re.search(rf"\b(?:it|test)(?:\.\w+)?\(\s*([\"'`]){re.escape(names[-1])}\1", body))
     path, _, rest = tid.partition("::")
     if path.endswith(".py") and not os.path.isfile(path):
         return False
@@ -670,6 +726,152 @@ def test_exists(tid):
     return False
 
 
+CODE_REF = re.compile(r"(?<![\w./\\-])([\w./\\-]+\.[A-Za-z0-9]+):(\d+)(?:-\d+)?(?![\w])")
+CHECKED_LINE = re.compile(r"^CHECKED:[ \t]*(\d+)\s*[—–-]+\s*(\S.*)$", re.M)
+
+
+def checked_ref_problems(evidence, need_test=False):
+    """리뷰 CHECKED 근거 한 줄의 문제. '미충족 — <id>'는 근거가 아니라 판정이라 검사하지 않는다.
+    근거 = 레포 테스트 파일에 정의된 테스트 이름(test_exists) 또는 '파일:줄'(파일이 있고 줄이 그 안). 근거가 실재하지 않거나
+    없으면 리뷰가 확인했다고 볼 수 없다. need_test(표준·강화)면 테스트 이름이 하나 이상 — 완료 조건을 실행된 테스트에 묶는다."""
+    ev = (evidence or "").strip()
+    if ev.startswith("미충족"):
+        return []
+    tids = test_ids(ev)
+    refs = CODE_REF.findall(ev)
+    if not tids and not refs:
+        return [f"근거에 테스트 이름도 '파일:줄'도 없음: '{ev[:50]}'"]
+    bad = [f"근거 테스트 {t}가 레포 테스트 파일에 없음" for t in tids if not test_exists(t)]
+    for path, line in refs:
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as f:
+                n = sum(1 for _ in f)
+        except OSError:
+            bad.append(f"근거 파일 {path} 없음")
+            continue
+        if not 1 <= int(line) <= n:
+            bad.append(f"근거 {path}:{line} — 줄 범위 밖(1~{n})")
+    if need_test and not tids:
+        bad.append("표준·강화 프로필 — 근거에 이 조건을 확인하는 테스트 이름이 필요(파일:줄만으로는 실행 증거에 묶이지 않음)")
+    return bad
+
+
+def unmet_problems(evidence, text):
+    """'미충족 — <FINDING id>' 근거의 모순(A9-03): 같은 응답의 FINDING에 그 id가 없거나, 응답이 VERDICT: CONFIRM이면
+    (충족 안 된 완료 조건이 있는데 확정) 무효."""
+    ev = (evidence or "").strip()
+    if not ev.startswith("미충족"):
+        return []
+    bad = []
+    ids = FID.findall(ev[len("미충족"):])
+    known = {x["id"] for x in findings(text)}
+    if not ids or not any(i in known for i in ids):
+        bad.append(f"'미충족' 근거가 이 응답의 FINDING id를 가리키지 않음: '{ev[:40]}'")
+    if re.search(r"^VERDICT:\s*CONFIRM", text, re.M):
+        bad.append("'미충족' 완료 조건이 있는데 VERDICT: CONFIRM — 모순")
+    return bad
+
+
+def checked_map(goal, cfg, extra_closed=()):
+    """유효 라운드를 차례로 보며 완료 조건별 근거 이력을 만든다(A10-02·A11-02).
+    (r1의 {번호: [근거…]} 또는 None, {번호: 마지막 근거(그 뒤 '미충족' 없음)}, {번호: 닫히지 않은 '미충족' FINDING id}, 문제 목록).
+    어느 라운드든 'CHECKED: n — 미충족 — <id>'는 그 라운드의 FINDING id여야 하고, 뒤 라운드 RESOLVED(또는 사람 결정
+    extra_closed)로 닫혀야 하며, 그 뒤 라운드가 그 조건의 새 근거를 달아야 한다."""
+    rounds = valid_rounds("r", goal, cfg)
+    first, final, pending, early, bad = {}, {}, {}, {}, []
+    for n, t in rounds:
+        here = {x["id"] for x in findings(t)}
+        for i in resolved_ids(t):   # 같은 라운드 안에서는 RESOLVED가 먼저 — 닫고 새 근거를 다는 순서
+            for k in pending:
+                pending[k].discard(i)
+        for k, ev in CHECKED_LINE.findall(t):
+            k, ev = int(k), ev.strip()
+            if n == 1:
+                first.setdefault(k, []).append(ev)
+            if ev.startswith("미충족"):
+                ids = set(FID.findall(ev[len("미충족"):]))
+                if not ids or not ids <= here:
+                    bad.append(f"리뷰 r{n} CHECKED {k}번 '미충족'이 그 라운드의 FINDING id를 가리키지 않음")
+                pending.setdefault(k, set()).update(ids)
+                final.pop(k, None)   # 미충족 뒤에는 새 근거가 필요하다
+                early.pop(k, None)
+            elif pending.get(k):
+                early[k] = ev   # A12-01: 지적이 닫히기 전에 단 근거는 확정 근거가 아니다(미충족 → RESOLVED → 새 근거 순서)
+            else:
+                final[k] = ev
+    for k in pending:
+        if pending[k] and pending[k] <= set(extra_closed) and k not in final and k in early:
+            final[k] = early[k]   # 사람 판정: 결정이 지적을 닫는 시점은 기록 밖 — 미충족 뒤에 단 근거면 받는다(실재·QA 대조는 그대로)
+        pending[k] -= set(extra_closed)
+    return (first if any(n == 1 for n, _ in rounds) else None), final, {k: v for k, v in pending.items() if v}, bad
+
+
+def checked_complete_problems(goal, cfg, text, extra_closed=()):
+    """qa·merge: 리뷰 근거를 review.py가 받을 때와 같은 규칙으로 다시 본다(A9-03·A10-01·A10-02·A11-02 — 원문이 뒤에
+    바뀌거나 지워져도). r1 CHECKED가 지금 「완료 조건」 1..N을 한 번씩. 조건마다 마지막 근거가 checked_ref_problems를 통과
+    (실재하는 테스트·파일:줄, 표준·강화는 테스트 이름). '미충족'은 RESOLVED(사람 판정이면 결정 줄의 ID — extra_closed)로
+    닫히고 그 뒤 새 근거가 있어야 한다. 사람 판정도 같은 검사를 받는다 — 사람이 정하는 것은 지적의 처리이지 테스트 실행이 아니다."""
+    first, final, pending, bad = checked_map(goal, cfg, extra_closed)
+    if first is None:
+        return []   # 라운드 기록 자체가 없는 경우는 review_evidence·human_review가 막는다
+    n_items = len(completion_items(text))
+    need = profile(sections(vf_git.normalize_mr(text, cfg))) != "경량"
+    bad = [f"{b} — 리뷰 재실행" for b in bad]
+    lack = [str(i) for i in range(1, n_items + 1) if len(first.get(i, [])) != 1]
+    extra = [str(k) for k in first if not 1 <= k <= n_items]
+    if lack or extra:
+        bad.append(f"리뷰 r1 CHECKED가 완료 조건 1~{n_items}을 한 번씩 덮지 않음(빠지거나 겹침: {', '.join(lack + extra)}) — 리뷰 재실행")
+    later = sorted({int(k) for n, t in valid_rounds("r", goal, cfg) if n > 1 for k, _ in CHECKED_LINE.findall(t)
+                    if not 1 <= int(k) <= n_items})
+    if later:
+        bad.append(f"리뷰 2·3라운드 CHECKED 번호 {', '.join(map(str, later))}가 완료 조건 1~{n_items} 밖 — 리뷰 재실행")
+    for k in range(1, n_items + 1):
+        if pending.get(k):
+            bad.append(f"리뷰 CHECKED {k}번 '미충족' FINDING {', '.join(sorted(pending[k]))}이 뒤 라운드 RESOLVED로 닫히지 않음 — "
+                       "고친 뒤 다음 라운드에서 닫는다(3라운드 뒤면 사람 판정)")
+            continue
+        ev = final.get(k)
+        if ev is None:
+            if first.get(k):
+                bad.append(f"완료 조건 {k}번의 확인 근거 없음 — '미충족'을 닫은 라운드가 'CHECKED: {k} — <테스트 이름·파일:줄>'을 달아야 한다")
+            continue
+        bad += [f"리뷰 CHECKED {k}번 {p} — 리뷰 재실행" for p in checked_ref_problems(ev, need)]
+    return bad
+
+
+def human_closed_ids(text):
+    """「리뷰 기록」이 사람 판정이면 그 결정 줄('- 사람 결정: D-nnn — <ID들>')의 지적 ID, 아니면 빈 집합.
+    완료 조건의 최종 근거는 이 ID로만 갈린다 — checked_complete_problems·checked_tests가 같은 값을 쓴다(A13-01)."""
+    rv = sections(text or "").get("리뷰 기록", "")
+    h = HUMAN_REVIEW.search(rv)
+    if not h:
+        return set()
+    dl = re.search(rf"^\s*-\s*사람 결정:\s*{h.group(1)}(?!\d)\s*[—–-]+\s*(\S.*)$", rv, re.M)
+    return set(FID.findall(dl.group(1))) if dl else set()
+
+
+def checked_tests(goal, cfg, text=None):
+    """완료 조건마다 최종 리뷰 근거(checked_map — 사람 판정이면 결정 ID 포함)의 테스트 이름 {조건 번호: [이름…]}."""
+    return {k: test_ids(ev) for k, ev in checked_map(goal, cfg, human_closed_ids(text))[1].items()}
+
+
+def checked_run_problems(goal, cfg, qa, text=None):
+    """merge: 리뷰가 완료 조건 근거로 든 테스트가 QA 실행 기록 tests에서 모두 ok — [x]가 실행된 테스트에 묶인다."""
+    cited = {k: v for k, v in checked_tests(goal, cfg, text).items() if v}
+    if not cited:
+        return []
+    tests = (_qa_record(qa) or {}).get("tests")
+    if not isinstance(tests, dict):
+        return ["리뷰 근거 테스트의 실행 결과 없음 — QA 기록에 테스트별 결과(tests)가 없다. test_cmd를 상세 출력(-v)으로 qa_run"]
+    bad = []
+    for k, ids in sorted(cited.items()):
+        for t in ids:
+            got = [v for name, v in tests.items() if test_match(t, name)]
+            if not got or any(v != "ok" for v in got):
+                bad.append(f"완료 조건 {k}의 근거 테스트 {t}({'·'.join(got) or 'QA 기록에 없음'})")
+    return [f"리뷰 근거 테스트가 QA 실행에서 ok가 아님 — {', '.join(bad[:4])}"] if bad else []
+
+
 def _last(name):
     """테스트 이름의 마지막 성분 — 'a.B.test_x' · 'p.py::test_x' · 'test_x (a.B.test_x)' → test_x."""
     parts = [x for x in re.split(r"::|[.\s()]+", name) if x]
@@ -684,7 +886,11 @@ def _qual(name):
 
 
 def test_match(rid, recorded):
-    """'- 회귀:' 식별자와 기록 이름 — 맨 이름(test_x)은 마지막 성분, 한정형(B.test_x · p.py::test_x)은 끝이 그 한정형."""
+    """'- 회귀:' 식별자와 기록 이름 — 맨 이름(test_x)은 마지막 성분, 한정형(B.test_x · p.py::test_x)은 끝이 그 한정형.
+    JS 식별자는 파일·묶음·이름을 구분자(›·>)와 무관하게 전부 같아야."""
+    jr, jk = js_parts(rid), js_parts(recorded)
+    if jr or jk:
+        return bool(jr and jk and jr == jk)
     q = _qual(rid)
     if "." not in q:
         return _last(recorded) == q
@@ -692,91 +898,205 @@ def test_match(rid, recorded):
     return r == q or r.endswith("." + q)
 
 
-UNVERIFIED_MSG = "미검증 항목이 남음 — 검증하거나 사람 승인(D-nnn)"
+# 검증·결정 상태(qa-gate.md 「상태 셋」) — merge 출력과 verify-evidence가 같은 이름을 쓴다
+#   UNVERIFIED     기술적 미검증(「QA 결과」 '- 미검증·생략 항목과 사유:'). 결정으로 통과가 되지 않는다 — 항상 차단
+#   ACCEPTED-RISK  미검증 항목의 배포 위험을 사용자가 인수(D-nnn). 상태로만 남고 게이트는 열리지 않는다 — 머지는 사용자가 직접 우회
+#   POLICY-PENDING 정책 미결(「영향·위험」 '- 미확인:'이 정책 결정·해소로 닫히지 않음). 위험 인수로는 닫히지 않는다 — 차단
+STATES = ("UNVERIFIED", "ACCEPTED-RISK", "POLICY-PENDING")
+ITEM_SPLIT = r"[,;，、]"
 
 
-def unverified_problems(qa, gids, cfg):
-    """merge: 「QA 결과」 '- 미검증·생략 항목과 사유:'는 필수 — 값이 정확히 '없음'이거나,
-    항목마다 '- 사람 승인: D-nnn — <항목>'(D-nnn은 DECISIONS에 있고 이 골 ID를 적음)."""
-    qa = re.sub(r"<!--.*?-->", "", qa or "", flags=re.S)
-    m = re.search(r"^\s*[-*]?\s*미검증·생략 항목과 사유\s*:(.*)$", qa, re.M)
-    if not m:
-        return [f"「QA 결과」에 '- 미검증·생략 항목과 사유:' 줄 없음(없으면 '없음') — {UNVERIFIED_MSG}"]
-    val = m.group(1).strip()
-    if val == "없음":
+def _items(val):
+    """'항목, 항목' 값의 항목들. 정확히 '없음'이면 [] — 비었거나 자리표시(<…>)뿐이면 None(값이 없다 = 판정 불가)."""
+    raw = (val or "").strip()
+    if _none(raw):
         return []
-    ok = []
-    for did, item in re.findall(r"^\s*[-*]?\s*사람 승인\s*:\s*(D-\d+)\s*[—–:-]+\s*(\S.*?)\s*$", qa, re.M):
-        if not decision_problem(did, gids, cfg):
-            ok.append(item)
-    items = [x.strip() for x in re.split(r"[,;，、]", val) if x.strip()]
-    left = [x for x in items if not any(a in x or x in a for a in ok)]
-    return [f"{UNVERIFIED_MSG} — {', '.join(left[:3])}"] if left or not items else []
+    val = re.sub(r"<[^>\n]*>", "", raw).strip()
+    items = [x.strip() for x in re.split(ITEM_SPLIT, val) if x.strip()]
+    return items or None
+
+
+def _norm_item(x):
+    return " ".join((x or "").split()).rstrip(".").strip()
+
+
+def _same(item, other):
+    """항목 일치는 정규화한 전체 문자열로만(A9-02 — 부분 문자열로 다른 항목의 결정·해소를 재사용하지 못하게)."""
+    return _norm_item(item) == _norm_item(other)
+
+
+def _decision_names(did, item, gids, cfg):
+    """결정 D-nnn이 유효하고(이 골 ID) 그 블록이 항목을 적었는가 — 결정이 실제로 그 항목을 다뤘다는 연결(A9-02)."""
+    if decision_problem(did, gids, cfg):
+        return False
+    blk = decision_block(did, cfg)[1] or ""
+    return _norm_item(item) in " ".join(blk.split())
+
+
+def _resolution_ok(why, qa):
+    """'- 해소: <항목> — <근거>'의 근거가 실재하는가: 테스트 이름이면 레포에 정의돼 있고 QA 실행 기록 tests에서 ok,
+    '파일:줄'이면 파일이 있고 줄이 그 안(A9-02 — 이름처럼 보이는 문자열만으로 닫지 않는다)."""
+    tids = test_ids(why)
+    refs = CODE_REF.findall(why)
+    if not tids and not refs:
+        return False
+    if checked_ref_problems(why):
+        return False
+    if tids:
+        tests = (_qa_record(qa) or {}).get("tests")
+        if not isinstance(tests, dict):
+            return False
+        for t in tids:
+            got = [v for k, v in tests.items() if test_match(t, k)]
+            if not got or any(v != "ok" for v in got):
+                return False
+    return True
+
+
+def verification_states(s, gids, cfg):
+    """MR 섹션에서 검증·결정 상태 [(상태, 항목, 근거)]. 상태는 STATES 중 하나 — 비면 막을 것이 없다.
+    값이 비었거나 자리표시(<…>)뿐인 줄은 '없음'이 아니다 — 그 줄 자체가 UNVERIFIED·POLICY-PENDING이다(A9-01)."""
+    qa = re.sub(r"<!--.*?-->", "", s.get("QA 결과", ""), flags=re.S)
+    risk = re.sub(r"<!--.*?-->", "", s.get("영향·위험", ""), flags=re.S)
+    out = []
+    m = re.search(r"^\s*[-*]?\s*미검증·생략 항목과 사유\s*:(.*)$", qa, re.M)
+    accepted = []
+    for did, item in re.findall(r"^\s*[-*]?\s*(?:위험 인수|사람 승인)\s*:\s*(D-\d+)\s*[—–:-]+\s*(\S.*?)\s*$", qa, re.M):
+        if _decision_names(did, item, gids, cfg):
+            accepted.append((item, did))
+    items = _items(m.group(1)) if m else []
+    if items is None:
+        out.append(("UNVERIFIED", f"(값 없음: '{m.group(1).strip()[:40]}')", ""))
+        items = []
+    for x in items:
+        hit = next((d for a, d in accepted if _same(x, a)), "")
+        out.append(("ACCEPTED-RISK" if hit else "UNVERIFIED", x, hit))
+    closed = [item for did, item in re.findall(r"^\s*[-*]?\s*정책 결정\s*:\s*(D-\d+)\s*[—–:-]+\s*(\S.*?)\s*$", risk, re.M)
+              if _decision_names(did, item, gids, cfg)]
+    closed += [item for item, why in re.findall(r"^\s*[-*]?\s*해소\s*:\s*(\S.*?)\s*[—–]+\s*(\S.*?)\s*$", risk, re.M)
+               if _resolution_ok(why, s.get("QA 결과", ""))]
+    for label in ("미확인", "정책 미결"):
+        for line in re.findall(rf"^\s*[-*]?\s*{label}\s*:(.*)$", risk, re.M):
+            got = _items(line)
+            if got is None:
+                out.append(("POLICY-PENDING", f"(「{label}」 값 없음: '{line.strip()[:40]}' — 없으면 정확히 '없음')", ""))
+                continue
+            out += [("POLICY-PENDING", x, "") for x in got if not any(_same(x, c) for c in closed)]
+    return out
+
+
+def unverified_problems(qa, gids, cfg, s=None):
+    """merge: 「QA 결과」 '- 미검증·생략 항목과 사유:'는 필수(없으면 정확히 '없음'). 미검증은 결정으로 통과가 되지 않는다 —
+    위험 인수(D-nnn, 블록이 그 항목을 적음)는 상태(ACCEPTED-RISK)로만 남고 차단은 그대로(머지는 사용자가 직접 우회).
+    「영향·위험」 '- 미확인:' 항목은 '- 정책 결정: D-nnn — <항목>'(블록이 그 항목을 적음) 또는
+    '- 해소: <항목> — <QA에서 ok인 테스트 이름·실재하는 파일:줄>'로 닫혀야 한다(POLICY-PENDING). 항목은 전체 일치."""
+    s = s if s is not None else {"QA 결과": qa or ""}
+    qa_clean = re.sub(r"<!--.*?-->", "", qa or "", flags=re.S)
+    if not re.search(r"^\s*[-*]?\s*미검증·생략 항목과 사유\s*:", qa_clean, re.M):
+        return ["「QA 결과」에 '- 미검증·생략 항목과 사유:' 줄 없음(없으면 '없음')"]
+    miss = []
+    for st, item, did in verification_states(s, gids, cfg):
+        if st == "UNVERIFIED":
+            miss.append(f"UNVERIFIED {item} — 검증한다(미검증은 결정으로 통과되지 않는다. 배포 위험을 인수하려면 사용자 결정 "
+                        "'- 위험 인수: D-nnn — <항목>' + 사용자가 직접 우회)")
+        elif st == "ACCEPTED-RISK":
+            miss.append(f"ACCEPTED-RISK {item} (위험 인수 {did}) — 미검증 상태 그대로. 게이트는 열리지 않는다: 머지는 사용자가 "
+                        "직접 우회하고 REMAINING에 부채로")
+        else:
+            miss.append(f"POLICY-PENDING {item} — 「영향·위험」 '- 정책 결정: D-nnn — <항목>'(사람 결정, 블록에 그 항목) 또는 "
+                        "'- 해소: <항목> — <QA에서 ok인 테스트 이름·파일:줄>'로 닫는다(위험 인수로는 닫히지 않는다)")
+    return miss
 
 
 def _qa_record(qa):
-    """「QA 결과」 대상의 QA 기록(.vibe/qa/<tree>.json) dict. 없으면 None."""
-    import json
-    try:
-        from qa_run import target as qa_target
-    except ImportError:
-        def qa_target(t):
-            m = re.search(r"대상 (?:commit|tree):\s*`?([0-9a-f]{7,40})", re.sub(r"<!--.*?-->", "", t or "", flags=re.S))
-            return m.group(1) if m else ""
-    sha = qa_target(qa)
-    tree = vf_git.tree_of(sha) if sha else ""
-    if not tree:
-        return None
-    try:
-        with open(os.path.join(".vibe", "qa", f"{tree}.json"), encoding="utf-8") as f:
-            rec = json.load(f)
-        return rec if isinstance(rec, dict) else None
-    except (OSError, ValueError):
-        return None
+    """「QA 결과」 대상의 QA 기록(.vibe/qa/<tree>.json) dict — qa_run.find_record(tree 객체가 없어도 기록 이름으로). 없으면 None."""
+    import qa_run
+    rec = qa_run.find_record(qa_run.target(qa))[1]
+    return rec if isinstance(rec, dict) else None
 
 
-def red_evidence(qa):
-    """표준·강화 merge: 이 브랜치의 RED 기록(.vibe/qa/red-<tree>.json, exit≠0)에서 실패한 테스트 하나 이상이
-    QA 기록 tests에서 ok(RED→GREEN). QA 기록에 tests가 없으면 exit≠0인 RED 기록만."""
+def red_valid(red):
+    """RED 기록이 RED인가: exit≠0이고 출력에서 실패한 테스트를 찾았다(tests에 fail, 또는 통과+건너뜀 < 전체) — 명령 오류는 RED가 아니다(B-06)."""
+    if not isinstance(red, dict) or red.get("exit") in (0, None) or red.get("changed_code"):
+        return False   # 실행 중 코드를 바꾼 실행은 그 tree의 RED가 아니다(A11-03)
+    tests = red.get("tests") if isinstance(red.get("tests"), dict) else {}
+    # 실패한 테스트 이름이 하나는 있어야 한다 — 수만으로는 수집·실행 오류와 구별되지 않는다(A10-06, test_cmd는 -v로)
+    return any(v == "fail" for v in tests.values())
+
+
+def select_red(qa, gids=(), cfg=None):
+    """merge와 export-evidence가 같이 쓰는 RED 선택(A9-06 — 로컬이 고른 RED를 그대로 커밋해 재연이 같은 것을 본다):
+    이 브랜치·이 골·이 기준의 RED 기록(qa_run --red --mr) 중 red_valid이고, 증거 판이 지금 판이며, QA(GREEN)보다 먼저 돌았고
+    (started), 실패한 테스트 하나 이상이 QA 기록 tests에서 ok(RED→GREEN)인 가장 최근 것. QA에 tests가 없으면 연결할 수 없어 없음. 없으면 ''."""
     import glob
     import json
+    cfg = cfg or vf_git.config()
     cur = vf_git.current_branch()
+    base = current_base(cfg)
     rec = _qa_record(qa) or {}
     green = rec.get("tests") if isinstance(rec.get("tests"), dict) else None
+    best = ("", "")
     for p in sorted(glob.glob(os.path.join(".vibe", "qa", "red-*.json"))):
         try:
             with open(p, encoding="utf-8") as f:
                 red = json.load(f)
         except (OSError, ValueError):
             continue
-        if not isinstance(red, dict) or red.get("branch") != cur or red.get("exit") in (0, None):
+        if not red_valid(red) or red.get("branch") != cur or red.get("base") != base:
             continue
-        if green is None:
-            return []
-        failed = [k for k, v in (red.get("tests") or {}).items() if v not in ("ok", "skip", "skipped")] if isinstance(red.get("tests"), dict) else []
-        if any(green.get(k) == "ok" for k in failed):
-            return []
-    return ["RED 증거 없음 — 구현 전 qa_run.py --red (표준·강화: 이 브랜치에서 실패한 테스트가 QA 기록에서 ok여야 함)"]
+        if not set(str(red.get("goal") or "").split(",")) & set(gids) or _old_schema(red.get("schema")):
+            continue
+        if rec.get("started") and not _before(red.get("started"), rec["started"]):
+            continue   # GREEN 뒤에 돌린 RED는 구현 전 실패의 증거가 아니다(A9-05)
+        failed = [k for k, v in (red.get("tests") or {}).items() if v == "fail"]
+        if green is None or not any(green.get(k) == "ok" for k in failed):
+            continue   # RED에서 실패한 테스트가 GREEN에서 ok여야 RED→GREEN이다(GREEN에 테스트별 결과가 없으면 연결 불가)
+        if str(red.get("started", "")) >= best[0]:
+            best = (str(red.get("started", "")), p)
+    return best[1]
+
+
+def _before(a, b):
+    """시각 문자열 a가 b보다 앞인가(ISO 8601, 시간대·마이크로초 포함 — 문자열이 아니라 시각으로 비교). 못 읽으면 False."""
+    import datetime
+    try:
+        return datetime.datetime.fromisoformat(str(a)) < datetime.datetime.fromisoformat(str(b))
+    except (TypeError, ValueError):
+        return False
+
+
+def red_evidence(qa, gids=(), cfg=None):
+    """표준·강화 merge: select_red가 고른 RED 기록이 있어야 한다."""
+    if select_red(qa, gids, cfg):
+        return []
+    return ["RED 증거 없음 — 구현 전 qa_run.py --red --mr <MR> (표준·강화: 이 브랜치·골·기준에서 구현 전에 실패한 테스트가 QA 기록에서 ok여야 함)"]
+
+
+def _old_schema(v):
+    try:
+        return int(v) < vf_git.EVIDENCE_SCHEMA
+    except (TypeError, ValueError):
+        return True
+
+
+def schema_problems(goal, cfg, qa):
+    """로컬 merge도 증거 판을 본다(A9-10 — 재연은 낮은 판을 LEGACY로 거른다): 이 골의 유효 설계 확인·리뷰 기록과 QA 기록의
+    schema가 지금 판(EVIDENCE_SCHEMA)이어야 한다. 낮으면 같은 코드에서 다시 돌린다(review.py·qa_run.py)."""
+    old = []
+    for kind in ("d", "r"):
+        for n, _ in valid_rounds(kind, goal, cfg):
+            rec = os.path.join(REVIEW_DIR, f"{kind}{n}.{'meta' if kind == 'd' else 'tree'}")
+            if _old_schema(record_fields(rec).get("schema")):
+                old.append(f"{kind}{n}")
+    q = _qa_record(qa)
+    if q is not None and _old_schema(q.get("schema")):
+        old.append("QA 기록")
+    return [f"LEGACY 증거 판 < v{vf_git.EVIDENCE_SCHEMA}: {', '.join(old)} — 같은 코드에서 다시 돌린다(review.py·qa_run.py)"] if old else []
 
 
 def regression_evidence(ids, qa):
     """강화 merge: '- 회귀:' 식별자마다 QA 기록(.vibe/qa/<tree>.json) 'tests'에 같은 이름(test_match)이 있고 모두 ok."""
-    import json
-    try:
-        from qa_run import target as qa_target
-    except ImportError:
-        def qa_target(t):
-            m = re.search(r"대상 (?:commit|tree):\s*`?([0-9a-f]{7,40})", re.sub(r"<!--.*?-->", "", t or "", flags=re.S))
-            return m.group(1) if m else ""
-    sha = qa_target(qa)
-    tree = vf_git.tree_of(sha) if sha else ""
-    tests = None
-    if tree:
-        try:
-            with open(os.path.join(".vibe", "qa", f"{tree}.json"), encoding="utf-8") as f:
-                tests = json.load(f).get("tests")
-        except (OSError, ValueError, AttributeError):
-            tests = None
+    tests = (_qa_record(qa) or {}).get("tests")
     if not isinstance(tests, dict):
         return ["회귀 테스트 실행 증거 없음 — test_cmd를 상세 출력(-v)으로 qa_run"]
     bad = []
@@ -795,13 +1115,16 @@ def human_review(did, goal, cfg, text):
     결정 뒤 코드 변경은 리뷰 tree가 아니라 QA 대상 tree가 잡는다(QA를 지금 작업물에서 다시)."""
     rounds = valid_rounds("r", goal, cfg)
     miss = []
-    if not rounds or rounds[-1][0] != 3:
-        miss.append(f"「리뷰 기록」 사람 판정 {did}: 3라운드 유효 기록(r3) 없음 — 사람 판정은 3라운드 뒤에만(그 전엔 다음 라운드)")
+    if [n for n, _ in rounds] != [1, 2, 3]:   # B-05: r3 하나만 남긴 것은 3라운드를 다 쓴 것이 아니다
+        miss.append(f"「리뷰 기록」 사람 판정 {did}: 유효 기록 r1·r2·r3가 모두 있어야 함(지금 "
+                    f"{', '.join(f'r{n}' for n, _ in rounds) or '없음'}) — 사람 판정은 3라운드 뒤에만(그 전엔 다음 라운드)")
     why = decision_problem(did, re.findall(r"\bG-\d{3,}\b", goal), cfg)
     if why:
         miss.append(f"「리뷰 기록」 사람 판정 {did}: {why} — 결정을 D-nnn으로 기록하고 이 골 ID를 적는다")
     miss += [f"r{n}: {p} — 리뷰 재실행" for n, t in rounds for p in resolved_problems(t)]
     miss += decision_cover(did, sections(text).get("리뷰 기록", ""), ledger(rounds, GATE_SEVS), cfg, "리뷰 기록")
+    # 사람이 정한 지적 ID만 '미충족'을 닫는다 — 완료 조건마다 실재하는 근거는 그대로 필요(A11 — 사람 판정 경로도 같은 검사)
+    miss += checked_complete_problems(goal, cfg, text, extra_closed=human_closed_ids(text))
     old = record_fields(os.path.join(REVIEW_DIR, "r3.tree")).get("conds")
     if rounds and rounds[-1][0] == 3 and not old:
         miss.append("리뷰 기록에 완료 조건 해시 없음(r3.tree) — 리뷰 재실행")
@@ -826,7 +1149,7 @@ def decision_tree_problems(did, sec, cfg):
     if not r3.startswith(m.group(1)):
         return [f"「리뷰 기록」 사람 결정 {did}의 tree {m.group(1)[:10]}가 r3 tree({r3[:10]})와 다름 — 결정이 본 tree를 적는다"]
     try:
-        code, _ = code_diff(r3, vf_git.snapshot(), cfg)
+        code = changed_since(r3, cfg, record_fields(os.path.join(REVIEW_DIR, "r3.tree")).get("code_tree", ""))
     except RuntimeError:
         return [f"r3 tree를 읽을 수 없음({r3[:10]}) — 리뷰 재실행"]
     if code:
@@ -846,7 +1169,13 @@ def review_evidence(goal, cfg, text=None):
     if why:
         return [f"「리뷰 기록」은 '판정: 확정'인데 리뷰 기록이 뒷받침하지 않음({why}) — review.py --round 1부터(지금 브랜치에서)"]
     rounds = valid_rounds("r", goal, cfg)
+    nums = [n for n, _ in rounds]
+    if nums != list(range(1, len(nums) + 1)):   # A9-09: 앞 라운드를 지우면 그 지적이 장부에서 사라진다
+        return [f"리뷰 유효 기록이 r1부터 이어지지 않음({', '.join(f'r{n}' for n in nums)}) — 빠진 라운드의 지적을 장부가 볼 수 없다. "
+                "review.py --round 1부터 다시"]
     bad = [f"r{n}: {p} — 리뷰 재실행" for n, t in rounds for p in resolved_problems(t)]
+    if text is not None:
+        bad += checked_complete_problems(goal, cfg, text)
     left = ledger(rounds, GATE_SEVS)
     if left:
         bad.append(f"열린 {', '.join(f'{s} {i}(r{n})' for i, (s, n) in sorted(left.items()))} — 뒤 라운드 RESOLVED에 없음"
@@ -864,13 +1193,10 @@ def review_evidence(goal, cfg, text=None):
         return [f"리뷰 뒤 완료 조건이 바뀜(r{n}.tree) — 리뷰 재실행(review.py --round 1)"]
     if text is not None and contract_problem(rec, text):
         return [contract_problem(rec, text)]
-    unread = [f"리뷰 기록 tree를 읽을 수 없음(r{n}.tree: {seen[:12]}) — 리뷰 재실행(review.py --round 1)"]
-    if not re.fullmatch(r"[0-9a-f]{7,40}", seen) or vf_git.obj_type(seen) != "tree":
-        return unread
     try:
-        code, _ = code_diff(seen, vf_git.snapshot(), cfg)
+        code = changed_since(seen, cfg, record_fields(rec).get("code_tree", ""))
     except RuntimeError:
-        return unread
+        return [f"리뷰 기록 tree를 읽을 수 없음(r{n}.tree: {seen[:12]}) — 리뷰 재실행(review.py --round 1)"]
     if not code:
         return []
     shown = ", ".join(code[:3]) + (" …" if len(code) > 3 else "")
@@ -895,17 +1221,32 @@ def merge_checks(qa, cfg):
             m = re.search(r"대상 (?:commit|tree):\s*`?([0-9a-f]{7,40})", re.sub(r"<!--.*?-->", "", t or "", flags=re.S))
             return m.group(1) if m else ""
     sha = qa_target(qa)
+    try:
+        import qa_run as _qr
+    except ImportError:   # 검증기가 없으면 아래에서 막는다(fail closed) — 대상 tree만 직접 푼다
+        _qr = None
+    if _qr is not None:
+        _, qrec, qtree = _qr.find_record(sha) if sha else ("", None, "")
+    else:
+        qrec, qtree = None, vf_git.tree_of(sha) if sha else ""
     if not sha:
         miss.append("「QA 결과」에 대상 commit/tree 없음")
-    elif not vf_git.tree_of(sha):
+    elif not qtree:
         miss.append(f"QA 대상 {sha[:10]}을 찾을 수 없음")
-    elif vf_git.tree_of(sha) != cur:
+    elif qtree != cur and vf_git.obj_type(qtree) == "tree":
         # QA 뒤 핸드오프 기록(WORKLOG·INDEX·REMAINING)과 골 파일만 바뀐 것은 허용 — 기록은 QA 결과를 보고 쓴다
         # 기록 판정은 크기 계산과 같은 is_record — 개인 모드에서 docs/ 아래 코드가 QA 뒤에 바뀌면 재검증
         # 실수로 추적 중인 무시 대상(.pyc 등 캐시)은 테스트를 돌릴 때마다 바뀐다 — 비교에서 빼고 경고만
-        code, ignored = code_diff(vf_git.tree_of(sha), cur, cfg)
+        code, ignored = code_diff(qtree, cur, cfg)
         if ignored:
             print(f"[mr-check] 경고: 무시 대상(산출물)인데 추적 중인 파일 {len(ignored)}개는 QA 대상 비교에서 뺐다({', '.join(sorted(ignored)[:3])}) — `git rm --cached`로 정리하는 골 후보를 쓰세요")
+        if code:
+            miss.append(f"QA 대상 {sha[:10]} 이후 바뀐 파일({', '.join(code[:3])}) — 재검증 필요(미커밋 포함)")
+    elif qtree != cur:   # QA tree 객체가 없다(재연 — amend 전 tree) — 실행 기록의 code_tree로 같은 비교
+        try:
+            code = changed_since(qtree, cfg, qrec.get("code_tree", "") if isinstance(qrec, dict) else "")
+        except RuntimeError:
+            code = ["(QA 기록에 code_tree 없음 — 대조 불가)"]
         if code:
             miss.append(f"QA 대상 {sha[:10]} 이후 바뀐 파일({', '.join(code[:3])}) — 재검증 필요(미커밋 포함)")
     if not re.search(rf"^-\s*코드:\s*{PASS}", qa, re.M):

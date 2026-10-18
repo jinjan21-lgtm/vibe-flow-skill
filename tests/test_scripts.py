@@ -57,12 +57,15 @@ def _vibe_record(name, text):
         f.write(text)
 
 
-def seed_review(goal="G-001", n=1, verdict="CONFIRM", extra="", mr=None):
+def seed_review(goal="G-001", n=1, verdict="CONFIRM", extra="", mr=None, evidence="docs/NORTHSTAR.md:1"):
     """지금 작업물·브랜치·기준의 리뷰 라운드 기록(r<N>.txt·r<N>.tree). mr_check는 「리뷰 기록」의 '판정: 확정'을
     이 기록과 대조한다 — MR 문구만으로는 확정이 아니다. conds는 mr(기본 MR_OK)의 완료 조건 해시(review.py와 같이)."""
     import mr_check
     import vf_git
-    _vibe_record(f"r{n}.txt", f"ROUND: {n}\n{extra}VERDICT: {verdict}\n")
+    m = MR_OK if mr is None else mr   # 라운드 1은 완료 조건마다 근거 한 줄(qa·merge가 r1 CHECKED를 다시 본다 — A9-03)
+    # evidence: 기본 '파일:줄'은 경량 MR만 통과 — 표준·강화(위험 ≠ 없음)는 레포 테스트 파일의 테스트 이름이어야 한다(A10)
+    chk = "".join(f"CHECKED: {i} — {evidence}\n" for i in range(1, len(mr_check.completion_items(m)) + 1)) if n == 1 else ""
+    _vibe_record(f"r{n}.txt", f"ROUND: {n}\n{chk}{extra}VERDICT: {verdict}\n")
     _vibe_record(f"r{n}.tree", vf_git.snapshot() + "\n" + mr_check.record_stamp(goal, vf_git.config())
                  + f"conds: {mr_check.completion_hash(MR_OK if mr is None else mr)}\n"
                  + f"contract: {mr_check.contract_hash(MR_OK if mr is None else mr)}\n")
@@ -89,8 +92,12 @@ def seed_qa_run(body):
         with open(os.path.join(".git", "info", "exclude"), "a", encoding="utf-8") as f:
             f.write("\n.vibe/\n")
         os.makedirs(os.path.join(".vibe", "qa"), exist_ok=True)
+        # 수는 「QA 결과」 코드 줄의 'N/M'과 같게(verify가 대조한다). 줄에 수가 없으면 1/1
+        said = re.search(r"^\s*-\s*코드:.*?(\d+)\s*/\s*(\d+)", body, re.M)
+        passed, total = (int(said.group(1)), int(said.group(2))) if said else (1, 1)
         with open(os.path.join(".vibe", "qa", tree + ".json"), "w", encoding="utf-8") as f:
-            json.dump({"tree": tree, "cmd": (vf_git.config().get("test_cmd") or "").strip(), "exit": 0}, f)
+            json.dump({"schema": vf_git.EVIDENCE_SCHEMA, "tree": tree, "cmd": (vf_git.config().get("test_cmd") or "").strip(),
+                       "exit": 0, "passed": passed, "total": total}, f)
     for p in re.findall(r"!\[[^\]]*\]\(([^)\s]+)\)", body):
         if not re.match(r"(?i)https?://", p) and not os.path.exists(p):
             with open(os.path.join(".git", "info", "exclude"), "a", encoding="utf-8") as f:
@@ -690,7 +697,8 @@ class TeamHandoffTest(unittest.TestCase):
             open(p, "w", encoding="utf-8", newline="\n").write(t)
             os.makedirs(os.path.join(cwd, "docs/handoff/mr"), exist_ok=True)
             w("docs/handoff/mr/G-001.md", MR_OK.replace("{qa}", "- 대상 tree: " + "a" * 40), "w")   # 기록 커밋에 MR 본문(검증 증거)
-            w("docs/handoff/mr/G-001-qa.json", '{"tree": "%s", "cmd": "t", "exit": 0}\n' % ("a" * 40), "w")   # QA 실행 기록 사본
+            w("docs/handoff/mr/G-001-qa.json",   # QA 실행 기록 사본 — 수(passed·total)가 없으면 통과가 아니다(A9-08)
+              '{"schema": 2, "tree": "%s", "cmd": "t", "exit": 0, "passed": 3, "total": 3}\n' % ("a" * 40), "w")
             w("docs/handoff/mr/G-001-review.md", "VERDICT: CONFIRM\n", "w")   # 리뷰 원문 사본
         sh("git", "add", "-A", cwd=cwd)
         sh("git", "commit", "-qm", "G-001 거래처 검색", cwd=cwd)

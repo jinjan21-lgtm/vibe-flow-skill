@@ -5,6 +5,11 @@ import os
 import subprocess
 import tempfile
 
+# 증거 스키마 판 — qa_run 기록·리뷰 기록(r<N>.tree·d<N>.meta)·export 사본이 'schema'를 남긴다. 규격이 바뀌면 올린다.
+# verify-evidence는 이보다 낮은(또는 없는) 판의 커밋 증거를 FAIL이 아니라 LEGACY(재검증 대상)로 나눈다.
+# 2: 리뷰 도장(tree·code_tree·goal·branch·base·conds·contract), QA code_tree, RED goal·base
+EVIDENCE_SCHEMA = 2
+
 DEFAULT_CFG = {"base": "main",
                "ui_globs": ["**/*.tsx", "**/*.jsx", "**/*.vue", "**/*.svelte", "**/*.css", "**/*.scss",
                             "**/*.html", "**/pages/**", "**/routes/**", "**/components/**"],
@@ -40,6 +45,10 @@ def config():
     if os.path.exists(".vibe-flow.json"):
         with open(".vibe-flow.json", encoding="utf-8") as f:
             cfg.update(json.load(f))
+    rp = os.environ.get("VF_REPLAY")
+    if rp:   # handoff.py verify-evidence 재연 전용 — 기준을 판정 회차 도장의 조상 커밋으로(handoff.REPLAY_DIFF)
+        cfg.update(json.loads(rp))
+        cfg["_replay"] = True
     return cfg
 
 
